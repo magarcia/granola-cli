@@ -10,16 +10,11 @@ export interface ListOptions {
 }
 
 function normalizeFolder(folder: DocumentList): Folder {
-  const documentIdsFromDocs = Array.isArray(folder.documents)
+  const documentIds = Array.isArray(folder.documents)
     ? folder.documents
         .map((doc: { id?: string }) => doc?.id)
         .filter((id: string | undefined): id is string => Boolean(id))
-    : undefined;
-
-  const documentIds =
-    Array.isArray(folder.document_ids) && folder.document_ids.length > 0
-      ? folder.document_ids
-      : documentIdsFromDocs;
+    : [];
 
   return {
     id: folder.id,
@@ -27,9 +22,11 @@ function normalizeFolder(folder: DocumentList): Folder {
     title: folder.title ?? folder.name ?? 'Untitled',
     created_at: folder.created_at,
     workspace_id: folder.workspace_id,
+    workspace_name: folder.workspace_display_name,
     owner_id: folder.owner_id,
-    document_ids: documentIds ?? [],
-    is_favourite: folder.is_favourite,
+    document_count: folder.document_count,
+    document_ids: documentIds,
+    is_favourited: folder.is_favourited,
   };
 }
 

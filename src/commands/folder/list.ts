@@ -62,10 +62,10 @@ export function createListCommand() {
         { key: 'id', header: 'ID', width: 12, format: (v) => String(v).slice(0, 8) },
         { key: 'display_name', header: 'NAME', width: 20, format: (v) => String(v || '') },
         {
-          key: 'workspace_id',
+          key: 'workspace_name',
           header: 'WORKSPACE',
-          width: 12,
-          format: (v) => String(v).slice(0, 8),
+          width: 20,
+          format: (v) => String(v || ''),
         },
       ]);
 

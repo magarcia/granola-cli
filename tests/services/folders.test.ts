@@ -30,7 +30,7 @@ describe('folders service', () => {
         title: 'Sales Calls',
         workspace_id: 'ws-1',
         document_ids: ['doc-1', 'doc-2'],
-        is_favourite: true,
+        is_favourited: true,
       });
     });
 
@@ -64,7 +64,7 @@ describe('folders service', () => {
           workspace_id: 'ws-1',
           owner_id: 'user-1',
           created_at: '2024-01-01T00:00:00Z',
-          is_favourite: false,
+          is_favourited: false,
           documents: [{ id: 'doc-a' }, { id: 'doc-b' }],
         },
       ];
@@ -78,27 +78,23 @@ describe('folders service', () => {
       expect(result[0].document_ids).toEqual(['doc-a', 'doc-b']);
     });
 
-    it('should prefer document_ids over documents array', async () => {
-      const foldersWithBoth = [
+    it('should handle folders with no documents array', async () => {
+      const foldersNoDocs = [
         {
           id: 'folder-1',
-          title: 'Folder with both',
-          workspace_id: 'ws-1',
-          owner_id: 'user-1',
+          title: 'Empty folder',
           created_at: '2024-01-01T00:00:00Z',
-          is_favourite: false,
-          document_ids: ['explicit-doc'],
-          documents: [{ id: 'doc-from-array' }],
+          is_favourited: false,
         },
       ];
       const mockClient = {
-        getDocumentLists: vi.fn().mockResolvedValue(foldersWithBoth),
+        getDocumentLists: vi.fn().mockResolvedValue(foldersNoDocs),
       };
       vi.mocked(getClient).mockResolvedValue(mockClient as never);
 
       const result = await list();
 
-      expect(result[0].document_ids).toEqual(['explicit-doc']);
+      expect(result[0].document_ids).toEqual([]);
     });
   });
 

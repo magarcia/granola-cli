@@ -51,10 +51,13 @@ export function createViewCommand() {
       }
 
       const name = folder.name || folder.title || 'Unnamed';
-      const docCount = folder.document_ids?.length || 0;
+      const docCount = folder.document_count ?? folder.document_ids?.length ?? 0;
 
       console.log(chalk.bold(name));
-      console.log(chalk.dim(`${docCount} meetings · Workspace ${folder.workspace_id}`));
+      const parts = [`${docCount} meetings`];
+      const ws = folder.workspace_name || folder.workspace_id;
+      if (ws) parts.push(`Workspace ${ws}`);
+      console.log(chalk.dim(parts.join(' · ')));
       console.log();
       console.log(chalk.dim('Tip: Use "granola meeting list" to browse recent meetings.'));
     });

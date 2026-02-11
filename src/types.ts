@@ -72,10 +72,12 @@ export interface Folder {
   name?: string;
   title?: string;
   created_at: string;
-  workspace_id: string;
-  owner_id: string;
+  workspace_id?: string;
+  workspace_name?: string;
+  owner_id?: string;
+  document_count?: number;
   document_ids?: string[];
-  is_favourite: boolean;
+  is_favourited?: boolean;
 }
 
 // === CLI Types ===
