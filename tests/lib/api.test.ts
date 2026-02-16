@@ -186,14 +186,14 @@ describe('api client', () => {
 
   describe('getDocumentLists', () => {
     it('should call POST /v2/get-document-lists', async () => {
-      vi.mocked(mockHttpClient.post).mockResolvedValue([]);
+      vi.mocked(mockHttpClient.post).mockResolvedValue({ lists: [] });
 
       await api.getDocumentLists();
 
       expect(mockHttpClient.post).toHaveBeenCalledWith('/v2/get-document-lists', {});
     });
 
-    it('should return the folders array', async () => {
+    it('should return the folders array from lists wrapper', async () => {
       const mockFolders = [
         {
           id: 'folder-1',
@@ -202,7 +202,7 @@ describe('api client', () => {
           documents: [{ id: 'doc-1', title: 'Meeting 1' }],
         },
       ];
-      vi.mocked(mockHttpClient.post).mockResolvedValue(mockFolders);
+      vi.mocked(mockHttpClient.post).mockResolvedValue({ lists: mockFolders });
 
       const result = await api.getDocumentLists();
 
@@ -216,7 +216,7 @@ describe('api client', () => {
         { id: 'folder-1', title: 'Sales', document_ids: ['doc-1'] },
         { id: 'folder-2', title: 'Support', document_ids: ['doc-2'] },
       ];
-      vi.mocked(mockHttpClient.post).mockResolvedValue(mockFolders);
+      vi.mocked(mockHttpClient.post).mockResolvedValue({ lists: mockFolders });
 
       const result = await api.getDocumentList('folder-2');
 
@@ -226,7 +226,7 @@ describe('api client', () => {
 
     it('should return null when folder is not found', async () => {
       const mockFolders = [{ id: 'folder-1', title: 'Sales', document_ids: ['doc-1'] }];
-      vi.mocked(mockHttpClient.post).mockResolvedValue(mockFolders);
+      vi.mocked(mockHttpClient.post).mockResolvedValue({ lists: mockFolders });
 
       const result = await api.getDocumentList('nonexistent');
 
@@ -234,7 +234,7 @@ describe('api client', () => {
     });
 
     it('should return null when folders array is empty', async () => {
-      vi.mocked(mockHttpClient.post).mockResolvedValue([]);
+      vi.mocked(mockHttpClient.post).mockResolvedValue({ lists: [] });
 
       const result = await api.getDocumentList('folder-1');
 
