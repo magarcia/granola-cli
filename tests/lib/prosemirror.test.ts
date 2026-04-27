@@ -19,6 +19,17 @@ describe('prosemirror', () => {
       expect(toMarkdown(null)).toBe('');
     });
 
+    it('should convert HTML string input to markdown', () => {
+      const html = '<h3>Title</h3><ul><li>Item</li></ul>';
+      const result = toMarkdown(html);
+      expect(result).toContain('### Title');
+      expect(result).toContain('- Item');
+    });
+
+    it('should return empty string for empty HTML string', () => {
+      expect(toMarkdown('')).toBe('');
+    });
+
     it('should return empty string for empty doc', () => {
       expect(toMarkdown(emptyDoc)).toBe('');
     });

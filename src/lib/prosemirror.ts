@@ -1,10 +1,15 @@
 import type { ProseMirrorDoc, ProseMirrorNode } from '../types.js';
 import { createGranolaDebug } from './debug.js';
+import { htmlToMarkdown } from './html.js';
 
 const debug = createGranolaDebug('lib:prosemirror');
 
-export function toMarkdown(doc: ProseMirrorDoc | null): string {
+export function toMarkdown(doc: ProseMirrorDoc | string | null): string {
   debug('toMarkdown called with doc: %O', doc);
+  if (typeof doc === 'string') {
+    debug('string input detected, delegating to htmlToMarkdown');
+    return htmlToMarkdown(doc);
+  }
   if (!doc?.content) {
     debug('No content in doc, returning empty string');
     return '';
