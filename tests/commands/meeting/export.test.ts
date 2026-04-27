@@ -46,7 +46,7 @@ describe('meeting export command', () => {
   it('should export meeting as JSON', async () => {
     vi.mocked(meetings.resolveId).mockResolvedValue('meeting-id');
     vi.mocked(meetings.get).mockResolvedValue(mockMeetings[0]);
-    vi.mocked(meetings.getNotes).mockResolvedValue(mockMeetingWithNotes.last_viewed_panel!.content);
+    vi.mocked(meetings.getNotes).mockResolvedValue(mockMeetingWithNotes.notes!);
     vi.mocked(meetings.getTranscript).mockResolvedValue(mockTranscript);
 
     const program = new Command();

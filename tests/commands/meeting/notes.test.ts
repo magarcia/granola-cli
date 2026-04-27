@@ -42,7 +42,7 @@ describe('meeting notes command', () => {
 
   it('should display meeting notes', async () => {
     vi.mocked(meetings.resolveId).mockResolvedValue('meeting-id');
-    vi.mocked(meetings.getNotes).mockResolvedValue(mockMeetingWithNotes.last_viewed_panel!.content);
+    vi.mocked(meetings.getNotes).mockResolvedValue(mockMeetingWithNotes.notes!);
 
     try {
       (process.stdout as any).isTTY = false;
@@ -61,7 +61,7 @@ describe('meeting notes command', () => {
 
   it('should use pager for TTY output', async () => {
     vi.mocked(meetings.resolveId).mockResolvedValue('meeting-id');
-    vi.mocked(meetings.getNotes).mockResolvedValue(mockMeetingWithNotes.last_viewed_panel!.content);
+    vi.mocked(meetings.getNotes).mockResolvedValue(mockMeetingWithNotes.notes!);
 
     try {
       (process.stdout as any).isTTY = true;
@@ -78,7 +78,7 @@ describe('meeting notes command', () => {
 
   it('should skip pager when not TTY', async () => {
     vi.mocked(meetings.resolveId).mockResolvedValue('meeting-id');
-    vi.mocked(meetings.getNotes).mockResolvedValue(mockMeetingWithNotes.last_viewed_panel!.content);
+    vi.mocked(meetings.getNotes).mockResolvedValue(mockMeetingWithNotes.notes!);
 
     try {
       (process.stdout as any).isTTY = false;
@@ -96,7 +96,7 @@ describe('meeting notes command', () => {
 
   it('should output JSON when --output json is set', async () => {
     vi.mocked(meetings.resolveId).mockResolvedValue('meeting-id');
-    vi.mocked(meetings.getNotes).mockResolvedValue(mockMeetingWithNotes.last_viewed_panel!.content);
+    vi.mocked(meetings.getNotes).mockResolvedValue(mockMeetingWithNotes.notes!);
 
     const program = new Command();
     program.addCommand(createNotesCommand());
@@ -115,7 +115,7 @@ describe('meeting notes command', () => {
 
   it('should output YAML when --output yaml is set', async () => {
     vi.mocked(meetings.resolveId).mockResolvedValue('meeting-id');
-    vi.mocked(meetings.getNotes).mockResolvedValue(mockMeetingWithNotes.last_viewed_panel!.content);
+    vi.mocked(meetings.getNotes).mockResolvedValue(mockMeetingWithNotes.notes!);
 
     const program = new Command();
     program.addCommand(createNotesCommand());
@@ -165,7 +165,7 @@ describe('meeting notes command', () => {
 
   it('should reject invalid output formats', async () => {
     vi.mocked(meetings.resolveId).mockResolvedValue('meeting-id');
-    vi.mocked(meetings.getNotes).mockResolvedValue(mockMeetingWithNotes.last_viewed_panel!.content);
+    vi.mocked(meetings.getNotes).mockResolvedValue(mockMeetingWithNotes.notes!);
 
     const program = new Command();
     program.addCommand(createNotesCommand());

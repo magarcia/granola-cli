@@ -1,4 +1,4 @@
-import type { Meeting, People, Person, Utterance } from '../../src/types.js';
+import type { Meeting, People, Person, ProseMirrorDoc, Utterance } from '../../src/types.js';
 
 export const mockMeeting: Meeting = {
   id: 'a1b2c3d4-e5f6-g7h8-i9j0-k1l2m3n4o5p6',
@@ -8,47 +8,50 @@ export const mockMeeting: Meeting = {
   workspace_id: 'abc12345',
 };
 
-export const mockMeetingWithNotes: Meeting = {
-  ...mockMeeting,
-  last_viewed_panel: {
-    content: {
-      type: 'doc',
+export const mockProseMirrorContent: ProseMirrorDoc = {
+  type: 'doc',
+  content: [
+    {
+      type: 'heading',
+      attrs: { level: 1 },
+      content: [{ type: 'text', text: 'Q4 Planning Session' }],
+    },
+    {
+      type: 'heading',
+      attrs: { level: 2 },
+      content: [{ type: 'text', text: 'Key Decisions' }],
+    },
+    {
+      type: 'bulletList',
       content: [
         {
-          type: 'heading',
-          attrs: { level: 1 },
-          content: [{ type: 'text', text: 'Q4 Planning Session' }],
-        },
-        {
-          type: 'heading',
-          attrs: { level: 2 },
-          content: [{ type: 'text', text: 'Key Decisions' }],
-        },
-        {
-          type: 'bulletList',
+          type: 'listItem',
           content: [
             {
-              type: 'listItem',
-              content: [
-                {
-                  type: 'paragraph',
-                  content: [{ type: 'text', text: 'Launch date moved to January 15th' }],
-                },
-              ],
+              type: 'paragraph',
+              content: [{ type: 'text', text: 'Launch date moved to January 15th' }],
             },
+          ],
+        },
+        {
+          type: 'listItem',
+          content: [
             {
-              type: 'listItem',
-              content: [
-                {
-                  type: 'paragraph',
-                  content: [{ type: 'text', text: 'Budget approved for contractor support' }],
-                },
-              ],
+              type: 'paragraph',
+              content: [{ type: 'text', text: 'Budget approved for contractor support' }],
             },
           ],
         },
       ],
     },
+  ],
+};
+
+export const mockMeetingWithNotes: Meeting = {
+  ...mockMeeting,
+  notes: mockProseMirrorContent,
+  last_viewed_panel: {
+    content: mockProseMirrorContent,
   },
 };
 

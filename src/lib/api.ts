@@ -33,7 +33,7 @@ export interface DocumentMetadata {
   attendees?: Person[];
   notes?: ProseMirrorDoc;
   last_viewed_panel?: {
-    content: ProseMirrorDoc;
+    content: ProseMirrorDoc | string;
   };
 }
 
