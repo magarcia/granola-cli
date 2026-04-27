@@ -32,7 +32,7 @@ export interface Meeting {
   workspace_id?: string;
   notes?: ProseMirrorDoc;
   last_viewed_panel?: {
-    content: ProseMirrorDoc;
+    content: ProseMirrorDoc | string;
   };
   people?: People;
   creator?: Person;

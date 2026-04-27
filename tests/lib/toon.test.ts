@@ -11,7 +11,7 @@ describe('toToon', () => {
       updated_at: mockMeetingWithNotes.updated_at,
       workspace_id: mockMeetingWithNotes.workspace_id,
       notes_markdown: '# Q4 Planning Session\n\n## Key Decisions\n\n- Launch date moved',
-      notes_raw: mockMeetingWithNotes.last_viewed_panel!.content,
+      notes_raw: mockMeetingWithNotes.notes!,
       transcript: mockTranscript,
     };
 

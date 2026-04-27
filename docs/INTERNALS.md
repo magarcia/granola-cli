@@ -270,8 +270,12 @@ Granola maintains two distinct types of notes for each meeting:
    - Include structured sections: key decisions, action items, discussion summaries
    - Accessed via `meeting enhanced <id>` command
    - Retrieved using `meetings.getEnhancedNotes(id)`
+   - Returned as a ProseMirror JSON document for desktop-authored meetings,
+     and as a raw HTML string for meetings authored via the Granola mobile
+     app's quick-notes feature. The CLI normalizes both to Markdown.
 
-Both note types are stored in ProseMirror JSON format and converted to Markdown for display.
+Manual notes are always stored in ProseMirror JSON format. Enhanced notes may
+be ProseMirror or HTML (see above); both are converted to Markdown for display.
 
 ```typescript
 // services/meetings.ts
@@ -280,9 +284,9 @@ export async function getNotes(id: string): Promise<ProseMirrorDoc | null> {
   return meeting?.notes ?? null;  // Manual notes only
 }
 
-export async function getEnhancedNotes(id: string): Promise<ProseMirrorDoc | null> {
+export async function getEnhancedNotes(id: string): Promise<ProseMirrorDoc | string | null> {
   const meeting = await getWithPanel(id);
-  return meeting?.last_viewed_panel?.content ?? null;  // AI-enhanced notes
+  return meeting?.last_viewed_panel?.content ?? null;  // AI-enhanced notes (may be HTML string)
 }
 ```
 

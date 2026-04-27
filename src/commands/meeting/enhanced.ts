@@ -40,7 +40,7 @@ export function createEnhancedCommand() {
         process.exit(1);
       }
 
-      let notes: ProseMirrorDoc | null;
+      let notes: ProseMirrorDoc | string | null;
       try {
         notes = await meetings.getEnhancedNotes(fullId);
       } catch (error) {

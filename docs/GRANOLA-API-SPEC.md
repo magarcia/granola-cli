@@ -445,6 +445,11 @@ Retrieves a paginated list of documents owned by the authenticated user.
 }
 ```
 
+> **Note on `last_viewed_panel.content`:** The API returns this field as either
+> a ProseMirror JSON document (desktop-authored notes, shown above) or a raw
+> HTML string (meetings authored via the Granola mobile app's quick-notes
+> feature). Clients should handle both shapes.
+
 **Pagination:**
 - Use `next_cursor` from response for subsequent requests
 - When `next_cursor` is null or absent, no more pages exist

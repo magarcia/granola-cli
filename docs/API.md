@@ -44,7 +44,7 @@ interface Meeting {
   workspace_id?: string;
   folder_id?: string;
   last_viewed_panel?: {
-    content?: ProseMirrorDoc;
+    content?: ProseMirrorDoc | string;  // string when authored via mobile quick-notes
   };
   people?: People;
 }

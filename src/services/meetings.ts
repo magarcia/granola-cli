@@ -311,21 +311,21 @@ export async function getNotes(id: string): Promise<ProseMirrorDoc | null> {
   });
 }
 
-export async function getEnhancedNotes(id: string): Promise<ProseMirrorDoc | null> {
+export async function getEnhancedNotes(id: string): Promise<ProseMirrorDoc | string | null> {
   return withTokenRefresh(async () => {
     debug('getEnhancedNotes called with id: %s', id);
     const client = await getClient();
     const metadata = await loadMeetingMetadata(client, id);
     if (metadata && 'last_viewed_panel' in metadata) {
       debug('getEnhancedNotes resolved via metadata response');
-      return (metadata.last_viewed_panel?.content || null) as ProseMirrorDoc | null;
+      return (metadata.last_viewed_panel?.content || null) as ProseMirrorDoc | string | null;
     }
 
     const meeting = await findMeetingViaDocuments(client, id, {
       includeLastViewedPanel: true,
     });
     if (meeting) {
-      return (meeting.last_viewed_panel?.content || null) as ProseMirrorDoc | null;
+      return (meeting.last_viewed_panel?.content || null) as ProseMirrorDoc | string | null;
     }
 
     return null;
