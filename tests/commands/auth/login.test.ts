@@ -7,6 +7,7 @@ vi.mock('../../../src/lib/auth.js', () => ({
   saveCredentials: vi.fn(),
   loadCredentialsFromFile: vi.fn(),
   getDefaultSupabasePath: vi.fn(() => '/mock/path/supabase.json'),
+  getDefaultStoredAccountsPath: vi.fn(() => '/mock/path/stored-accounts.json'),
 }));
 
 import * as auth from '../../../src/lib/auth.js';
@@ -59,13 +60,16 @@ describe('login command', () => {
     expect(console_.errors.some((log) => /Could not load credentials/i.test(log))).toBe(true);
   });
 
-  it('should show path in error message when credentials not found', async () => {
+  it('should show both paths in error message when credentials not found', async () => {
     vi.mocked(auth.loadCredentialsFromFile).mockResolvedValue(null);
 
     const program = new Command();
     program.addCommand(createLoginCommand());
 
     await expect(program.parseAsync(['node', 'test', 'login'])).rejects.toThrow('process.exit');
+    expect(console_.errors.some((log) => /\/mock\/path\/stored-accounts\.json/i.test(log))).toBe(
+      true,
+    );
     expect(console_.errors.some((log) => /\/mock\/path\/supabase\.json/i.test(log))).toBe(true);
   });
 });

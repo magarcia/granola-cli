@@ -1,6 +1,7 @@
 import chalk from 'chalk';
 import { Command } from 'commander';
 import {
+  getDefaultStoredAccountsPath,
   getDefaultSupabasePath,
   loadCredentialsFromFile,
   saveCredentials,
@@ -25,10 +26,16 @@ export function createLoginCommand() {
       debug('login command invoked');
       const creds = await loadCredentialsFromFile();
       if (!creds) {
-        const path = getDefaultSupabasePath();
-        debug('login failed: could not load credentials from %s', path);
+        const storedAccountsPath = getDefaultStoredAccountsPath();
+        const supabasePath = getDefaultSupabasePath();
+        debug(
+          'login failed: could not load credentials from %s or %s',
+          storedAccountsPath,
+          supabasePath,
+        );
         console.error(chalk.red('Error:'), 'Could not load credentials.');
-        console.error(`Expected file at: ${chalk.dim(path)}`);
+        console.error(`Looked for: ${chalk.dim(storedAccountsPath)}`);
+        console.error(`       and: ${chalk.dim(supabasePath)}`);
         console.error('\nMake sure the Granola desktop app is installed and you are logged in.');
         process.exit(1);
       }
