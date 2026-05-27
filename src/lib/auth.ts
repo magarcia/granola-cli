@@ -1,3 +1,5 @@
+import { execFileSync } from 'node:child_process';
+import { createDecipheriv, pbkdf2Sync } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { homedir, platform } from 'node:os';
 import { join } from 'node:path';
@@ -11,6 +13,16 @@ const debug = createGranolaDebug('lib:auth');
 const SERVICE_NAME = 'com.granola.cli';
 const ACCOUNT_NAME = 'credentials';
 const DEFAULT_CLIENT_ID = 'client_GranolaMac';
+const GRANOLA_SAFE_STORAGE_SERVICE = 'Granola Safe Storage';
+const GRANOLA_SAFE_STORAGE_ACCOUNT = 'Granola Key';
+const MAC_SAFE_STORAGE_PREFIX = 'v10';
+const MAC_SAFE_STORAGE_SALT = 'saltysalt';
+const MAC_SAFE_STORAGE_ITERATIONS = 1003;
+const MAC_SAFE_STORAGE_KEY_LENGTH = 16;
+const MAC_SAFE_STORAGE_IV = Buffer.from(' '.repeat(16));
+const STORAGE_DEK_LENGTH = 32;
+const STORAGE_IV_LENGTH = 12;
+const STORAGE_AUTH_TAG_LENGTH = 16;
 
 export async function getCredentials(): Promise<Credentials | null> {
   debug('loading credentials from keychain');
@@ -177,12 +189,87 @@ export function getDefaultSupabasePath(): string {
   return path;
 }
 
+function getDefaultStorageDekPath(): string {
+  return join(homedir(), 'Library', 'Application Support', 'Granola', 'storage.dek');
+}
+
+function decryptMacSafeStorageValue(encryptedValue: Buffer): string {
+  const password = execFileSync(
+    'security',
+    [
+      'find-generic-password',
+      '-w',
+      '-s',
+      GRANOLA_SAFE_STORAGE_SERVICE,
+      '-a',
+      GRANOLA_SAFE_STORAGE_ACCOUNT,
+    ],
+    { encoding: 'utf8' },
+  ).trimEnd();
+
+  const payload =
+    encryptedValue.subarray(0, MAC_SAFE_STORAGE_PREFIX.length).toString() ===
+    MAC_SAFE_STORAGE_PREFIX
+      ? encryptedValue.subarray(MAC_SAFE_STORAGE_PREFIX.length)
+      : encryptedValue;
+  const key = pbkdf2Sync(
+    password,
+    MAC_SAFE_STORAGE_SALT,
+    MAC_SAFE_STORAGE_ITERATIONS,
+    MAC_SAFE_STORAGE_KEY_LENGTH,
+    'sha1',
+  );
+  const decipher = createDecipheriv('aes-128-cbc', key, MAC_SAFE_STORAGE_IV);
+  return Buffer.concat([decipher.update(payload), decipher.final()]).toString('utf8');
+}
+
+function decryptGranolaStorage(encryptedValue: Buffer, dek: Buffer): string {
+  if (dek.length !== STORAGE_DEK_LENGTH) {
+    throw new Error(`Invalid Granola storage key length: ${dek.length}`);
+  }
+
+  const iv = encryptedValue.subarray(0, STORAGE_IV_LENGTH);
+  const authTag = encryptedValue.subarray(encryptedValue.length - STORAGE_AUTH_TAG_LENGTH);
+  const encryptedPayload = encryptedValue.subarray(
+    STORAGE_IV_LENGTH,
+    encryptedValue.length - STORAGE_AUTH_TAG_LENGTH,
+  );
+  const decipher = createDecipheriv('aes-256-gcm', dek, iv, {
+    authTagLength: STORAGE_AUTH_TAG_LENGTH,
+  });
+  decipher.setAuthTag(authTag);
+  return Buffer.concat([decipher.update(encryptedPayload), decipher.final()]).toString('utf8');
+}
+
+async function loadEncryptedCredentialsFromFile(): Promise<Credentials | null> {
+  if (platform() !== 'darwin') return null;
+
+  const encryptedPath = `${getDefaultSupabasePath()}.enc`;
+  const dekPath = getDefaultStorageDekPath();
+  debug('loading encrypted credentials from file: %s', encryptedPath);
+
+  try {
+    const encryptedCredentials = await readFile(encryptedPath);
+    const encryptedDek = await readFile(dekPath);
+    const dek = Buffer.from(decryptMacSafeStorageValue(encryptedDek), 'base64');
+    const content = decryptGranolaStorage(encryptedCredentials, dek);
+    debug('encrypted file read successful, parsing content');
+    return parseSupabaseJson(content);
+  } catch (error) {
+    debug('failed to load encrypted credentials from file: %O', error);
+    return null;
+  }
+}
+
 /**
  * Loads credentials from the default Granola supabase.json file.
  *
  * @returns Credentials if found and valid, null otherwise
  */
 export async function loadCredentialsFromFile(): Promise<Credentials | null> {
+  const encryptedCreds = await loadEncryptedCredentialsFromFile();
+  if (encryptedCreds) return encryptedCreds;
+
   const path = getDefaultSupabasePath();
   debug('loading credentials from file: %s', path);
   try {

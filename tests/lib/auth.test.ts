@@ -1,3 +1,4 @@
+import { createCipheriv, pbkdf2Sync, randomBytes } from 'node:crypto';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Credentials } from '../../src/types.js';
 
@@ -6,6 +7,11 @@ vi.mock('cross-keychain', () => ({
   getPassword: vi.fn(),
   setPassword: vi.fn(),
   deletePassword: vi.fn(),
+}));
+
+// Mock child_process for macOS safeStorage keychain lookups
+vi.mock('node:child_process', () => ({
+  execFileSync: vi.fn(),
 }));
 
 // Mock node:os for platform-specific path tests
@@ -24,6 +30,7 @@ vi.mock('../../src/lib/lock.js', () => ({
   withLock: vi.fn((operation: () => Promise<unknown>) => operation()),
 }));
 
+import * as childProcess from 'node:child_process';
 import * as fs from 'node:fs/promises';
 import * as os from 'node:os';
 // Import the mocked module to access mock functions
@@ -39,6 +46,18 @@ import {
   saveCredentials,
 } from '../../src/lib/auth.js';
 import { withLock } from '../../src/lib/lock.js';
+
+function encryptMacSafeStorageValue(value: string, password: string): Buffer {
+  const key = pbkdf2Sync(password, 'saltysalt', 1003, 16, 'sha1');
+  const cipher = createCipheriv('aes-128-cbc', key, Buffer.from(' '.repeat(16)));
+  return Buffer.concat([Buffer.from('v10'), cipher.update(value, 'utf8'), cipher.final()]);
+}
+
+function encryptGranolaStorage(value: string, dek: Buffer): Buffer {
+  const iv = randomBytes(12);
+  const cipher = createCipheriv('aes-256-gcm', dek, iv, { authTagLength: 16 });
+  return Buffer.concat([iv, cipher.update(value, 'utf8'), cipher.final(), cipher.getAuthTag()]);
+}
 
 describe('auth', () => {
   beforeEach(() => {
@@ -371,8 +390,8 @@ describe('auth', () => {
 
   describe('loadCredentialsFromFile', () => {
     it('should return credentials when file exists and is valid', async () => {
-      vi.mocked(os.platform).mockReturnValue('darwin');
-      vi.mocked(os.homedir).mockReturnValue('/Users/testuser');
+      vi.mocked(os.platform).mockReturnValue('linux');
+      vi.mocked(os.homedir).mockReturnValue('/home/testuser');
 
       const validSupabaseJson = JSON.stringify({
         refresh_token: 'file-refresh-token',
@@ -387,6 +406,113 @@ describe('auth', () => {
         refreshToken: 'file-refresh-token',
         accessToken: 'file-access-token',
         clientId: 'file-client-id',
+      });
+    });
+
+    it('should import credentials from encrypted Granola storage when available', async () => {
+      vi.mocked(os.platform).mockReturnValue('darwin');
+      vi.mocked(os.homedir).mockReturnValue('/Users/testuser');
+
+      const password = 'test-safe-storage-password';
+      const dek = randomBytes(32);
+      const encryptedDek = encryptMacSafeStorageValue(dek.toString('base64'), password);
+      const encryptedSupabaseJson = encryptGranolaStorage(
+        JSON.stringify({
+          workos_tokens: JSON.stringify({
+            access_token: 'encrypted-access-token',
+            refresh_token: 'encrypted-refresh-token',
+            client_id: 'encrypted-client-id',
+          }),
+        }),
+        dek,
+      );
+
+      vi.mocked(childProcess.execFileSync).mockReturnValue(`${password}\n`);
+      vi.mocked(fs.readFile).mockImplementation((async (path) => {
+        if (String(path).endsWith('supabase.json.enc')) return encryptedSupabaseJson;
+        if (String(path).endsWith('storage.dek')) return encryptedDek;
+        throw new Error(`Unexpected path: ${String(path)}`);
+      }) as typeof fs.readFile);
+
+      const result = await loadCredentialsFromFile();
+
+      expect(childProcess.execFileSync).toHaveBeenCalledWith(
+        'security',
+        ['find-generic-password', '-w', '-s', 'Granola Safe Storage', '-a', 'Granola Key'],
+        { encoding: 'utf8' },
+      );
+      expect(result).toEqual({
+        refreshToken: 'encrypted-refresh-token',
+        accessToken: 'encrypted-access-token',
+        clientId: 'encrypted-client-id',
+      });
+    });
+
+    it('should prefer encrypted credentials over stale plaintext credentials', async () => {
+      vi.mocked(os.platform).mockReturnValue('darwin');
+      vi.mocked(os.homedir).mockReturnValue('/Users/testuser');
+
+      const password = 'test-safe-storage-password';
+      const dek = randomBytes(32);
+      const encryptedDek = encryptMacSafeStorageValue(dek.toString('base64'), password);
+      const encryptedSupabaseJson = encryptGranolaStorage(
+        JSON.stringify({
+          workos_tokens: JSON.stringify({
+            access_token: 'current-access-token',
+            refresh_token: 'current-refresh-token',
+          }),
+        }),
+        dek,
+      );
+
+      vi.mocked(childProcess.execFileSync).mockReturnValue(`${password}\n`);
+      vi.mocked(fs.readFile).mockImplementation((async (path, encoding) => {
+        const pathString = String(path);
+        if (pathString.endsWith('supabase.json.enc')) return encryptedSupabaseJson;
+        if (pathString.endsWith('storage.dek')) return encryptedDek;
+        if (pathString.endsWith('supabase.json') && encoding === 'utf-8') {
+          return JSON.stringify({
+            refresh_token: 'stale-refresh-token',
+            access_token: 'stale-access-token',
+          });
+        }
+        throw new Error(`Unexpected path: ${pathString}`);
+      }) as typeof fs.readFile);
+
+      const result = await loadCredentialsFromFile();
+
+      expect(result).toEqual({
+        refreshToken: 'current-refresh-token',
+        accessToken: 'current-access-token',
+        clientId: 'client_GranolaMac',
+      });
+    });
+
+    it('should fall back to plaintext credentials when encrypted storage is unavailable', async () => {
+      vi.mocked(os.platform).mockReturnValue('darwin');
+      vi.mocked(os.homedir).mockReturnValue('/Users/testuser');
+
+      vi.mocked(fs.readFile).mockImplementation((async (path, encoding) => {
+        const pathString = String(path);
+        if (pathString.endsWith('supabase.json.enc')) {
+          throw new Error('ENOENT: no such file or directory');
+        }
+        if (pathString.endsWith('supabase.json') && encoding === 'utf-8') {
+          return JSON.stringify({
+            refresh_token: 'plaintext-refresh-token',
+            access_token: 'plaintext-access-token',
+          });
+        }
+        throw new Error(`Unexpected path: ${pathString}`);
+      }) as typeof fs.readFile);
+
+      const result = await loadCredentialsFromFile();
+
+      expect(childProcess.execFileSync).not.toHaveBeenCalled();
+      expect(result).toEqual({
+        refreshToken: 'plaintext-refresh-token',
+        accessToken: 'plaintext-access-token',
+        clientId: 'client_GranolaMac',
       });
     });
 
