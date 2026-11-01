@@ -149,6 +149,26 @@ describe('meeting export command', () => {
   });
 
   describe('export with participants', () => {
+    it('exports participant metadata when the document has no people object', async () => {
+      vi.mocked(meetings.resolveId).mockResolvedValue('meeting-id');
+      vi.mocked(meetings.get).mockResolvedValue({
+        ...mockMeetings[0],
+        people: undefined,
+        creator: mockMeetingWithPeople.creator,
+        attendees: mockMeetingWithPeople.attendees,
+      });
+      vi.mocked(meetings.getNotes).mockResolvedValue(null);
+      vi.mocked(meetings.getTranscript).mockResolvedValue([]);
+
+      await new Command()
+        .addCommand(createExportCommand())
+        .parseAsync(['node', 'test', 'export', 'meeting-id']);
+
+      expect(JSON.parse(console_.logs[0]).people).toEqual({
+        creator: mockMeetingWithPeople.creator,
+        attendees: mockMeetingWithPeople.attendees,
+      });
+    });
     it('should include people in exported JSON', async () => {
       vi.mocked(meetings.resolveId).mockResolvedValue('meeting-id');
       vi.mocked(meetings.get).mockResolvedValue(mockMeetingWithPeople);

@@ -49,7 +49,7 @@ npx granola-cli meeting list
 ## Quick Start
 
 ```bash
-# Authenticate with Granola (imports from desktop app)
+# Authenticate with Granola
 granola auth login
 
 # List your recent meetings
@@ -72,9 +72,31 @@ The CLI stores credentials securely in your system keychain.
 ### Login
 
 ```bash
-# Import credentials from Granola desktop app
 granola auth login
 ```
+
+The CLI reuses a valid stored session or imports valid credentials from an older desktop installation. Otherwise, it opens browser sign-in:
+
+1. Complete sign-in in the browser.
+2. Leave the final **Opening Granola** page open.
+3. On macOS, the CLI opens Chrome and reads the matching callback automatically. Allow macOS Automation access when asked. If detection fails or takes more than one minute, the CLI asks you to copy the page's full address and paste it into the terminal. Other platforms use manual paste.
+
+To start a new browser sign-in or use Microsoft:
+
+```bash
+granola auth login --browser
+granola auth login --browser --provider microsoft
+```
+
+To use manual paste and your default browser on macOS:
+
+```bash
+granola auth login --browser --no-auto-callback
+```
+
+Automatic detection checks all Chrome windows for this sign-in's callback. The callback contains a one-time sign-in code.
+
+Google is the default provider. Browser sign-in creates a CLI session and works independently of the desktop app's encrypted credential storage.
 
 ### Check Status
 
@@ -88,6 +110,8 @@ Output:
 Authenticated
 ```
 
+Status checks the session with Granola and refreshes an expired access token when possible. A stored credential alone does not count as authenticated.
+
 ### Logout
 
 ```bash
@@ -98,14 +122,17 @@ granola auth logout
 
 - Access tokens are automatically refreshed when they expire
 - Refresh tokens are single-use and rotated on each refresh
-- If token refresh fails, you'll need to re-run `granola auth login`
+- If Granola rejects the refresh token, run `granola auth login --browser`
+- Network and server failures report errors; retry when the service is available
 
 ### Troubleshooting
 
 If you see authentication errors:
 
 1. Run `granola auth status` to check credential status
-2. Run `granola auth login` to re-import credentials from Granola desktop
+2. Run `granola auth login --browser` to start a new sign-in
+
+Browser sign-in requires an interactive terminal and expires after five minutes. On macOS, Chrome callback detection runs first. If it fails, paste the final redirect address when asked. Use `--no-auto-callback` to skip detection. You do not need to decrypt desktop files or remove desktop app data.
 
 ## Commands
 
@@ -723,10 +750,20 @@ done
 ### Setup
 
 ```bash
-git clone https://github.com/your-username/granola-cli.git
+git clone https://github.com/magarcia/granola-cli.git
 cd granola-cli
 npm install
 ```
+
+To use this checkout through the installed `granola` command:
+
+```bash
+npm run build
+npm link
+granola --version
+```
+
+Rebuild after source changes; the linked command uses `dist/main.js` from this checkout.
 
 ### Scripts
 
@@ -738,6 +775,7 @@ npm install
 | `npm run test:watch`    | Run tests in watch mode        |
 | `npm run test:coverage` | Run tests with coverage report |
 | `npm run typecheck`     | Type-check without emitting    |
+| `npm run test:e2e`      | Test the built CLI against your Granola account |
 
 ### Testing
 
@@ -750,6 +788,8 @@ npm test
 # Run tests with coverage
 npm run test:coverage
 ```
+
+`npm run test:e2e` runs the built CLI with your existing Granola session. It reports command results without printing meeting contents. Checks that need unavailable folders or recent meeting content are reported as `SKIP`. Command failures, timeouts, and invalid output fail the run with a safe diagnostic. Fresh browser sign-in and forced token expiry are not part of this smoke test.
 
 ### Project Structure
 
@@ -773,6 +813,7 @@ granola-cli/
 │   └── lib/                 # Utility libraries
 │       ├── api.ts           # Granola API client
 │       ├── auth.ts          # Credential management
+│       ├── browser-auth.ts  # Browser sign-in with PKCE
 │       ├── config.ts        # Configuration management
 │       ├── date-parser.ts   # Natural date parsing
 │       ├── debug.ts         # Debug logging utilities

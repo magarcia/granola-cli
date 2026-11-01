@@ -60,7 +60,14 @@ export function createExportCommand() {
         created_at: meeting.created_at,
         updated_at: meeting.updated_at,
         workspace_id: meeting.workspace_id,
-        people: meeting.people,
+        people:
+          meeting.people ??
+          (meeting.creator || meeting.attendees
+            ? {
+                creator: meeting.creator,
+                attendees: meeting.attendees,
+              }
+            : undefined),
         notes_markdown: notes ? toMarkdown(notes) : null,
         notes_raw: notes,
         transcript,

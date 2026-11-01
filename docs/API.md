@@ -2,6 +2,8 @@
 
 This document describes the internal APIs and types used by Granola CLI.
 
+The HTTP client uses Granola's unofficial desktop API at `https://api.granola.ai`. It does not use the official public API or public API keys.
+
 ## Types
 
 All types are defined in `src/types.ts`.
@@ -111,8 +113,13 @@ interface Folder {
   id: string;
   name?: string;
   title?: string;
-  workspace_id: string;
+  workspace_id?: string;
+  workspace_name?: string;
+  owner_id?: string;
+  created_at: string;
   document_ids?: string[];
+  document_count?: number;
+  is_favourite: boolean;
 }
 ```
 
@@ -121,6 +128,7 @@ interface Folder {
 ```typescript
 interface Credentials {
   refreshToken: string;
+  accessToken: string;
   clientId: string;
 }
 ```
@@ -175,16 +183,17 @@ async function list(options?: ListOptions): Promise<Meeting[]>
 // Resolve partial meeting ID to full ID (prefix matching)
 async function resolveId(partialId: string): Promise<string | null>
 
-// Get a single meeting
+// Get the full document from a batch response, enriched with participant metadata
 async function get(id: string): Promise<Meeting | null>
 
-// Get manual meeting notes (user-written)
+// Get manual meeting notes (user-written); non-404 errors propagate
 async function getNotes(id: string): Promise<ProseMirrorDoc | null>
 
-// Get AI-enhanced meeting notes (from last_viewed_panel)
+// Get AI-enhanced meeting notes (from last_viewed_panel); non-404 errors propagate
 async function getEnhancedNotes(id: string): Promise<ProseMirrorDoc | null>
 
-// Get meeting transcript
+// Get meeting transcript; a missing transcript (HTTP 404) returns [].
+// Authentication, server, and network errors propagate.
 async function getTranscript(id: string): Promise<Utterance[]>
 ```
 
@@ -203,6 +212,8 @@ async function get(id: string): Promise<Workspace | null>
 ### folders.ts
 
 Folder operations.
+
+Folders come from `POST /v1/get-document-lists-metadata` with `include_document_ids: true` and `include_only_joined_lists: false`. The response contains a `lists` object keyed by folder ID. Normalization preserves explicit `document_ids` and maps the API's `is_favourited` field to `Folder.is_favourite`.
 
 ```typescript
 interface ListOptions {
@@ -226,15 +237,32 @@ Credential management using system keychain.
 // Get stored credentials
 async function getCredentials(): Promise<Credentials | null>
 
-// Save credentials
+// Validate the stored session, refreshing rejected access tokens when possible
+async function getAuthenticatedCredentials(): Promise<Credentials | null>
+
+// Validate credentials with Granola's get-user-info endpoint
+async function validateCredentials(creds: Credentials): Promise<boolean>
+
+// Refresh through Granola's backend and persist rotated credentials
+async function refreshAccessToken(): Promise<Credentials | null>
+
+// Save credentials; session replacement callers must hold the refresh lock
 async function saveCredentials(creds: Credentials): Promise<void>
 
 // Delete credentials
 async function deleteCredentials(): Promise<void>
 
-// Parse Supabase JSON format (from desktop app)
+// Parse desktop token stores and browser token responses
 function parseSupabaseJson(json: string): Credentials | null
 ```
+
+### browser-auth.ts
+
+Browser sign-in uses PKCE and a one-time redirect code. The CLI verifies the final browser address and its sign-in state. The verifier stays in memory. Requests time out after 15 seconds, and interactive sign-in expires after five minutes.
+
+`auth login` supports Google and Microsoft through `--provider google|microsoft`. `--browser` starts a new sign-in even when a valid CLI session exists.
+
+On macOS, browser sign-in opens Chrome and uses `chrome-callback.ts` to read the matching redirect from any Chrome window by default. macOS Automation permission is required. Detection stops on completion, cancellation, failure, or after one minute. The CLI asks for manual paste if detection fails or times out. `--no-auto-callback` skips detection and opens the default browser. Other platforms use manual paste.
 
 ### config.ts
 

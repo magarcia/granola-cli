@@ -15,6 +15,7 @@
     "build": "tsup",
     "dev": "tsup --watch",
     "test": "vitest run",
+    "test:e2e": "npm run build && node scripts/smoke.mjs",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
     "typecheck": "tsc --noEmit",

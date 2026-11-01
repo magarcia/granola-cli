@@ -91,6 +91,7 @@ src/
 └── lib/                   # Utilities
     ├── api.ts             # Granola API client wrapper
     ├── auth.ts            # Keychain credential management
+    ├── browser-auth.ts    # Browser sign-in with PKCE
     ├── config.ts          # User preferences (via conf)
     ├── date-parser.ts     # Natural language date parsing
     ├── filters.ts         # Meeting filter utilities
@@ -168,7 +169,7 @@ granola [--no-pager]
 4. API Client (services/client.ts)
    ├─ Singleton pattern ensures one client instance
    ├─ Loads credentials from keychain (lib/auth.ts)
-   └─ Initializes GranolaClient with refresh token
+   └─ Creates the HTTP/API client with the access token
 
 5. Libraries Layer
    ├─ formatTranscript() (lib/transcript.ts)
@@ -187,23 +188,23 @@ granola [--no-pager]
 ### Authentication Flow
 
 ```
-1. User runs: granola login import
+1. User runs: granola auth login
    └─ commands/auth/login.ts
 
 2. Login Command
-   ├─ Reads credentials from Granola desktop app
-   │   └─ ~/Library/Application Support/Granola/supabase.json
-   └─ Calls saveCredentials()
+   ├─ Reuses a server-validated CLI session when available
+   ├─ Tries valid legacy desktop credentials from supabase.json
+   └─ Otherwise starts browser sign-in with PKCE
 
 3. Auth Library (lib/auth.ts)
-   ├─ Parses Supabase JSON
-   ├─ Extracts refresh_token and client_id
-   └─ Stores in system keychain via cross-keychain
+   ├─ Validates credentials through /v1/get-user-info
+   ├─ Refreshes expired sessions through /v1/refresh-access-token
+   └─ Stores validated credentials in the OS keychain
 
 4. Subsequent Commands
    ├─ Call getClient() (services/client.ts)
    ├─ getCredentials() reads from keychain
-   ├─ Creates GranolaClient instance
+   ├─ Creates the native HTTP/API client
    └─ Caches client for reuse (singleton)
 ```
 
@@ -255,12 +256,20 @@ Each command follows a consistent pattern:
 
 **`lib/auth.ts`** - Credential Management
 - Uses `cross-keychain` for secure OS-level storage
-- Parses Supabase OAuth JSON
+- Validates sessions against Granola and imports legacy Supabase JSON
 - Default client ID fallback
-- Token refresh with file-based locking (via `lock.ts`)
+- Token refresh and login credential writes share a file lock (via `lock.ts`)
+
+**`lib/browser-auth.ts`** - Browser Sign-in
+- Generates an in-memory PKCE verifier and sign-in state
+- Opens Google or Microsoft sign-in
+- On macOS, opens Chrome and uses `chrome-callback.ts` to read the matching redirect across all windows by default; asks for manual paste after failure or one minute
+- `--no-auto-callback` skips detection; other platforms use manual paste
+- Checks the redirect state and exchanges the code for a CLI session
+- Uses 15-second request timeouts and a five-minute prompt timeout
 
 **`lib/lock.ts`** - File-based Locking
-- Prevents race conditions during token refresh across CLI processes
+- Serializes token refresh and login credential writes across CLI processes
 - Uses `O_CREAT | O_EXCL` for atomic lock acquisition
 - Automatic stale lock cleanup (60s timeout)
 - Lock location: `~/Library/Caches/granola/` (macOS) or system temp dir
@@ -360,7 +369,8 @@ Account: `credentials`
 
 ```json
 {
-  "refreshToken": "supabase-refresh-token",
+  "refreshToken": "refresh-token",
+  "accessToken": "access-token",
   "clientId": "client_GranolaMac"
 }
 ```

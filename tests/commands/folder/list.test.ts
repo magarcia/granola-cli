@@ -43,6 +43,22 @@ describe('folder list command', () => {
     expect(folders.list).toHaveBeenCalledWith({ workspace: 'abc12345' });
   });
 
+  it('should show workspace names and fall back to workspace IDs', async () => {
+    vi.mocked(folders.list).mockResolvedValue([
+      { ...mockFolders[0], workspace_name: 'Sales Team' },
+      mockFolders[1],
+      { ...mockFolders[2], workspace_id: undefined },
+    ]);
+
+    const program = new Command().addCommand(createListCommand());
+    await program.parseAsync(['node', 'test', 'list']);
+
+    const output = console_.logs.join('\n');
+    expect(output).toContain('Sales Team');
+    expect(output).toContain('abc12345');
+    expect(output).not.toMatch(/undefine/);
+  });
+
   it('should output JSON when --output json is set', async () => {
     vi.mocked(folders.list).mockResolvedValue(mockFolders);
 

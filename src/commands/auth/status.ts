@@ -1,6 +1,6 @@
 import chalk from 'chalk';
 import { Command } from 'commander';
-import { getCredentials } from '../../lib/auth.js';
+import { getAuthenticatedCredentials } from '../../lib/auth.js';
 import { createGranolaDebug } from '../../lib/debug.js';
 import { formatOutput, type OutputFormat } from '../../lib/output.js';
 
@@ -20,15 +20,16 @@ export function createStatusCommand() {
     .option('-o, --output <format>', 'Output format (json, yaml, toon)')
     .action(async (opts) => {
       debug('status command invoked');
-      const creds = await getCredentials();
+      const format = opts.output || null;
+      if (format && !['json', 'yaml', 'toon'].includes(format)) {
+        console.error(chalk.red(`Invalid format: ${format}. Use 'json', 'yaml', or 'toon'.`));
+        process.exit(1);
+      }
+
+      const creds = await getAuthenticatedCredentials();
       debug('authenticated: %s', !!creds);
 
-      const format = opts.output || null;
       if (format) {
-        if (!['json', 'yaml', 'toon'].includes(format)) {
-          console.error(chalk.red(`Invalid format: ${format}. Use 'json', 'yaml', or 'toon'.`));
-          process.exit(1);
-        }
         console.log(formatOutput({ authenticated: !!creds }, format as OutputFormat));
         return;
       }

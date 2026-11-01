@@ -10,6 +10,7 @@ npm run dev            # Watch mode build during development
 npm test               # Run full test suite with vitest
 npm run test:watch     # Watch mode tests
 npm run test:coverage  # Tests with coverage report (95% threshold)
+npm run test:e2e       # Build and test the CLI against the stored Granola account
 npm run typecheck      # Type-check without emitting
 npm run lint           # Lint with biome
 npm run lint:fix       # Auto-fix linting issues
@@ -46,6 +47,8 @@ src/lib/ (utilities: auth, config, http, output, pager, etc.)
 - **Services** (`src/services/`): meetings.ts, workspaces.ts, folders.ts, client.ts
 - **Libraries** (`src/lib/`):
   - `auth.ts` - OS keychain credential storage (cross-keychain)
+  - `browser-auth.ts` - Interactive browser sign-in with PKCE
+  - `chrome-callback.ts` - Default macOS Chrome callback detection with Automation permission and manual fallback
   - `config.ts` - User preferences via conf package
   - `http.ts` - HTTP client with retry logic (3 retries, exponential backoff)
   - `api.ts` - Granola API client wrapper

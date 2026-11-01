@@ -22,7 +22,7 @@ Thank you for your interest in contributing to Granola CLI! This document provid
 
 ```bash
 # Clone the repository
-git clone https://github.com/your-username/granola-cli.git
+git clone https://github.com/magarcia/granola-cli.git
 cd granola-cli
 
 # Install dependencies
@@ -58,7 +58,7 @@ src/
 ├── main.ts              # Entry point, CLI setup, alias expansion
 ├── types.ts             # Shared TypeScript types
 ├── commands/            # Command implementations
-├── services/            # API layer (uses granola-ts-client)
+├── services/            # API layer
 └── lib/                 # Shared utilities
 ```
 
@@ -165,13 +165,16 @@ We use Test-Driven Development (TDD) with a target of 100% code coverage:
 
 ```bash
 # Run tests in watch mode
-npm test
+npm run test:watch
 
 # Run tests once
-npm run test:run
+npm test
 
 # Run with coverage report
 npm run test:coverage
+
+# Build and test the CLI against your existing Granola session
+npm run test:e2e
 ```
 
 ### Test Structure

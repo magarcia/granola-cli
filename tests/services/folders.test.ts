@@ -100,6 +100,43 @@ describe('folders service', () => {
 
       expect(result[0].document_ids).toEqual(['explicit-doc']);
     });
+
+    it('should preserve document_ids when documents are absent', async () => {
+      vi.mocked(getClient).mockResolvedValue({
+        getDocumentLists: vi.fn().mockResolvedValue([
+          {
+            id: 'folder-1',
+            created_at: '2024-01-01T00:00:00Z',
+            document_ids: ['explicit-doc'],
+          },
+        ]),
+      } as never);
+
+      expect((await list())[0].document_ids).toEqual(['explicit-doc']);
+    });
+
+    it('should normalize current folder fields without requiring workspace or owner IDs', async () => {
+      vi.mocked(getClient).mockResolvedValue({
+        getDocumentLists: vi.fn().mockResolvedValue([
+          {
+            id: 'folder-1',
+            title: 'Sales Calls',
+            created_at: '2024-01-01T00:00:00Z',
+            workspace_display_name: 'Sales',
+            document_count: 12,
+            is_favourited: true,
+          },
+        ]),
+      } as never);
+
+      expect((await list())[0]).toMatchObject({
+        id: 'folder-1',
+        workspace_name: 'Sales',
+        document_count: 12,
+        document_ids: [],
+        is_favourite: true,
+      });
+    });
   });
 
   describe('get', () => {

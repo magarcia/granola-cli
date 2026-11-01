@@ -43,7 +43,7 @@ export const mockDocumentListsApiResponse: DocumentList[] = [
     workspace_id: 'ws-1',
     owner_id: 'user-1',
     created_at: '2024-01-01T00:00:00Z',
-    is_favourite: true,
+    is_favourited: true,
     documents: [{ id: 'doc-1' }, { id: 'doc-2' }],
   },
   {
@@ -52,7 +52,7 @@ export const mockDocumentListsApiResponse: DocumentList[] = [
     workspace_id: 'ws-2',
     owner_id: 'user-2',
     created_at: '2024-02-01T00:00:00Z',
-    is_favourite: false,
+    is_favourited: false,
     documents: [{ id: 'doc-3' }],
   },
 ];
