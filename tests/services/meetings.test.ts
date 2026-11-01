@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { ApiError } from '../../src/lib/http.js';
 
 // Mock the client module
 vi.mock('../../src/services/client.js', () => ({
@@ -436,106 +437,159 @@ describe('meetings service', () => {
   });
 
   describe('get', () => {
-    it('should get a single meeting by id using getDocumentMetadata', async () => {
-      const meetingId = 'a1b2c3d4-e5f6-g7h8-i9j0-k1l2m3n4o5p6';
+    it('should combine the full meeting with participant metadata', async () => {
+      const meeting = mockMeetings[0];
       const mockClient = {
-        getDocumentMetadata: vi.fn().mockResolvedValue(mockMeetings[0]),
+        getDocumentsBatch: vi.fn().mockResolvedValue({ documents: [meeting] }),
+        getDocumentMetadata: vi.fn().mockResolvedValue({
+          id: meeting.id,
+          creator: mockPerson,
+          attendees: mockPeople.attendees,
+          conferencing: null,
+          url: 'https://example.com/meeting',
+        }),
       };
       vi.mocked(getClient).mockResolvedValue(mockClient as never);
 
-      const result = await get(meetingId);
+      const result = await get(meeting.id);
 
-      // get() adds the id from the parameter to the response
+      expect(mockClient.getDocumentsBatch).toHaveBeenCalledWith({
+        document_ids: [meeting.id],
+        include_last_viewed_panel: false,
+      });
       expect(result).toMatchObject({
-        id: meetingId,
-        title: mockMeetings[0].title,
+        ...meeting,
+        creator: mockPerson,
+        attendees: mockPeople.attendees,
       });
     });
 
-    it('should return null when meeting not found', async () => {
+    it('should select the matching meeting and preserve its core fields', async () => {
+      const meeting = mockMeetings[0];
       const mockClient = {
-        getDocumentMetadata: vi.fn().mockResolvedValue(null),
+        getDocumentsBatch: vi.fn().mockResolvedValue({ documents: [mockMeetings[1], meeting] }),
+        getDocumentMetadata: vi.fn().mockResolvedValue({
+          id: 'different-id',
+          title: undefined,
+          created_at: undefined,
+          updated_at: undefined,
+          creator: mockPerson,
+        }),
+      };
+      vi.mocked(getClient).mockResolvedValue(mockClient as never);
+
+      const result = await get(meeting.id);
+
+      expect(result).toMatchObject(meeting);
+      expect(result?.creator).toEqual(mockPerson);
+    });
+
+    it('should return null when the batch does not contain the meeting', async () => {
+      const mockClient = {
+        getDocumentsBatch: vi.fn().mockResolvedValue({ documents: [mockMeetings[1]] }),
+        getDocumentMetadata: vi.fn(),
+      };
+      vi.mocked(getClient).mockResolvedValue(mockClient as never);
+
+      const result = await get(mockMeetings[0].id);
+
+      expect(result).toBeNull();
+      expect(mockClient.getDocumentMetadata).not.toHaveBeenCalled();
+    });
+
+    it('should return null when the batch contains no meetings', async () => {
+      const mockClient = {
+        getDocumentsBatch: vi.fn().mockResolvedValue({ documents: [] }),
+        getDocumentMetadata: vi.fn(),
       };
       vi.mocked(getClient).mockResolvedValue(mockClient as never);
 
       const result = await get('nonexistent-id');
 
       expect(result).toBeNull();
+      expect(mockClient.getDocumentMetadata).not.toHaveBeenCalled();
     });
 
-    it('should return null on error', async () => {
+    it('should preserve the meeting when optional metadata is not found', async () => {
+      const meeting = { ...mockMeetings[0], people: mockPeople };
       const mockClient = {
-        getDocumentMetadata: vi.fn().mockRejectedValue(new Error('Not found')),
+        getDocumentsBatch: vi.fn().mockResolvedValue({ documents: [meeting] }),
+        getDocumentMetadata: vi.fn().mockRejectedValue(new ApiError('Not found', 404)),
       };
       vi.mocked(getClient).mockResolvedValue(mockClient as never);
 
-      const result = await get('error-id');
+      const result = await get(meeting.id);
 
-      expect(result).toBeNull();
+      expect(result).toEqual(meeting);
     });
 
-    it('should return meeting with people data when available', async () => {
-      const meetingId = mockMeetings[0].id;
+    it('should preserve the meeting when optional metadata is empty', async () => {
+      const meeting = mockMeetings[0];
       const mockClient = {
-        getDocumentMetadata: vi.fn().mockResolvedValue({
-          ...mockMeetings[0],
-          people: mockPeople,
-        }),
+        getDocumentsBatch: vi.fn().mockResolvedValue({ documents: [meeting] }),
+        getDocumentMetadata: vi.fn().mockResolvedValue(null),
       };
       vi.mocked(getClient).mockResolvedValue(mockClient as never);
 
-      const result = await get(meetingId);
+      const result = await get(meeting.id);
 
-      expect(result?.people).toBeDefined();
-      expect(result?.people?.creator).toMatchObject({ name: 'John Doe' });
-      expect(result?.people?.attendees).toEqual(
-        expect.arrayContaining([expect.objectContaining({ name: 'Jane Smith' })]),
-      );
+      expect(result).toEqual(meeting);
     });
 
-    it('should return meeting with undefined people when not available', async () => {
-      const meetingId = 'meeting-without-people';
+    it('should handle participant metadata containing only the creator', async () => {
+      const meeting = mockMeetings[0];
       const mockClient = {
-        getDocumentMetadata: vi.fn().mockResolvedValue(mockMeetings[0]),
+        getDocumentsBatch: vi.fn().mockResolvedValue({ documents: [meeting] }),
+        getDocumentMetadata: vi.fn().mockResolvedValue({ creator: mockPerson }),
       };
       vi.mocked(getClient).mockResolvedValue(mockClient as never);
 
-      const result = await get(meetingId);
+      const result = await get(meeting.id);
 
-      expect(result?.people).toBeUndefined();
+      expect(result?.creator).toEqual(mockPerson);
+      expect(result?.attendees).toBeUndefined();
     });
 
-    it('should handle partial people data (creator only)', async () => {
-      const meetingId = 'meeting-creator-only';
+    it('should handle participant metadata containing only attendees', async () => {
+      const meeting = mockMeetings[0];
       const mockClient = {
-        getDocumentMetadata: vi.fn().mockResolvedValue({
-          ...mockMeetings[0],
-          people: { creator: mockPerson },
-        }),
+        getDocumentsBatch: vi.fn().mockResolvedValue({ documents: [meeting] }),
+        getDocumentMetadata: vi.fn().mockResolvedValue({ attendees: mockPeople.attendees }),
       };
       vi.mocked(getClient).mockResolvedValue(mockClient as never);
 
-      const result = await get(meetingId);
+      const result = await get(meeting.id);
 
-      expect(result?.people?.creator).toBeDefined();
-      expect(result?.people?.creator?.name).toBe('John Doe');
-      expect(result?.people?.attendees).toBeUndefined();
+      expect(result?.creator).toBeUndefined();
+      expect(result?.attendees).toEqual(mockPeople.attendees);
     });
 
-    it('should handle partial people data (attendees only)', async () => {
-      const meetingId = 'meeting-attendees-only';
+    it.each([
+      ['authentication', new ApiError('Unauthorized', 401)],
+      ['server', new ApiError('Internal server error', 500)],
+      ['network', new Error('fetch failed')],
+    ])('should propagate %s errors from the document batch', async (_, error) => {
       const mockClient = {
-        getDocumentMetadata: vi.fn().mockResolvedValue({
-          ...mockMeetings[0],
-          people: { attendees: mockPeople.attendees },
-        }),
+        getDocumentsBatch: vi.fn().mockRejectedValue(error),
+        getDocumentMetadata: vi.fn(),
       };
       vi.mocked(getClient).mockResolvedValue(mockClient as never);
 
-      const result = await get(meetingId);
+      await expect(get(mockMeetings[0].id)).rejects.toBe(error);
+    });
 
-      expect(result?.people?.creator).toBeUndefined();
-      expect(result?.people?.attendees).toHaveLength(2);
+    it.each([
+      ['authentication', new ApiError('Unauthorized', 401)],
+      ['server', new ApiError('Internal server error', 500)],
+      ['network', new Error('fetch failed')],
+    ])('should propagate %s errors from optional metadata', async (_, error) => {
+      const mockClient = {
+        getDocumentsBatch: vi.fn().mockResolvedValue({ documents: [mockMeetings[0]] }),
+        getDocumentMetadata: vi.fn().mockRejectedValue(error),
+      };
+      vi.mocked(getClient).mockResolvedValue(mockClient as never);
+
+      await expect(get(mockMeetings[0].id)).rejects.toBe(error);
     });
   });
 
@@ -551,15 +605,61 @@ describe('meetings service', () => {
       expect(result).toEqual(mockTranscript);
     });
 
-    it('should return empty array on error', async () => {
+    it('should return empty array when the transcript is not found', async () => {
       const mockClient = {
-        getDocumentTranscript: vi.fn().mockRejectedValue(new Error('Not found')),
+        getDocumentTranscript: vi.fn().mockRejectedValue(new ApiError('Not found', 404)),
       };
       vi.mocked(getClient).mockResolvedValue(mockClient as never);
 
       const result = await getTranscript('meeting-id');
 
       expect(result).toEqual([]);
+    });
+
+    it.each([
+      ['authentication', new ApiError('Unauthorized', 401)],
+      ['server', new ApiError('Internal server error', 500)],
+      ['network', new Error('fetch failed')],
+    ])('should propagate %s errors', async (_, error) => {
+      const mockClient = {
+        getDocumentTranscript: vi.fn().mockRejectedValue(error),
+      };
+      vi.mocked(getClient).mockResolvedValue(mockClient as never);
+
+      await expect(getTranscript('meeting-id')).rejects.toBe(error);
+    });
+  });
+
+  describe.each([
+    { name: 'manual notes', load: getNotes },
+    { name: 'enhanced notes', load: getEnhancedNotes },
+  ])('$name error handling', ({ load }) => {
+    it.each([
+      { source: 'metadata', error: new ApiError('Unauthorized', 401) },
+      { source: 'metadata', error: new ApiError('Unavailable', 503) },
+      { source: 'metadata', error: new Error('fetch failed') },
+      { source: 'documents', error: new ApiError('Unauthorized', 401) },
+      { source: 'documents', error: new ApiError('Unavailable', 503) },
+      { source: 'documents', error: new Error('fetch failed') },
+    ])('propagates $source errors: $error', async ({ source, error }) => {
+      const client = {
+        getDocumentMetadata:
+          source === 'metadata'
+            ? vi.fn().mockRejectedValue(error)
+            : vi.fn().mockResolvedValue(null),
+        getDocuments: vi.fn().mockRejectedValue(error),
+      };
+      vi.mocked(getClient).mockResolvedValue(client as never);
+      await expect(load('meeting-id')).rejects.toBe(error);
+      if (source === 'metadata') expect(client.getDocuments).not.toHaveBeenCalled();
+    });
+
+    it('returns null for missing notes', async () => {
+      vi.mocked(getClient).mockResolvedValue({
+        getDocumentMetadata: vi.fn().mockRejectedValue(new ApiError('Not found', 404)),
+        getDocuments: vi.fn().mockRejectedValue(new ApiError('Not found', 404)),
+      } as never);
+      expect(await load('missing-id')).toBeNull();
     });
   });
 
@@ -630,16 +730,14 @@ describe('meetings service', () => {
       expect(result).toBeNull();
     });
 
-    it('should return null on error', async () => {
+    it('should propagate document search errors', async () => {
       const mockClient = {
         getDocumentMetadata: vi.fn().mockResolvedValue(null),
         getDocuments: vi.fn().mockRejectedValue(new Error('Server error')),
       };
       vi.mocked(getClient).mockResolvedValue(mockClient as never);
 
-      const result = await getNotes('error-id');
-
-      expect(result).toBeNull();
+      await expect(getNotes('error-id')).rejects.toThrow('Server error');
     });
 
     it('should find meeting notes on a later page', async () => {
@@ -725,16 +823,14 @@ describe('meetings service', () => {
       expect(result).toBeNull();
     });
 
-    it('should return null on error', async () => {
+    it('should propagate document search errors', async () => {
       const mockClient = {
         getDocumentMetadata: vi.fn().mockResolvedValue(null),
         getDocuments: vi.fn().mockRejectedValue(new Error('Server error')),
       };
       vi.mocked(getClient).mockResolvedValue(mockClient as never);
 
-      const result = await getEnhancedNotes('error-id');
-
-      expect(result).toBeNull();
+      await expect(getEnhancedNotes('error-id')).rejects.toThrow('Server error');
     });
   });
 

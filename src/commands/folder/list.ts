@@ -37,7 +37,6 @@ export function createListCommand() {
         process.exit(1);
       }
 
-      // Handle structured output formats
       const format = opts.output || null;
       if (format) {
         if (!['json', 'yaml', 'toon'].includes(format)) {
@@ -56,16 +55,17 @@ export function createListCommand() {
       const rows = data.map((folder) => ({
         ...folder,
         display_name: folder.name || folder.title || 'Unnamed',
+        display_workspace: folder.workspace_name || folder.workspace_id || '',
       }));
 
       const output = table(rows, [
         { key: 'id', header: 'ID', width: 12, format: (v) => String(v).slice(0, 8) },
         { key: 'display_name', header: 'NAME', width: 20, format: (v) => String(v || '') },
         {
-          key: 'workspace_id',
+          key: 'display_workspace',
           header: 'WORKSPACE',
-          width: 12,
-          format: (v) => String(v).slice(0, 8),
+          width: 20,
+          format: (v) => String(v),
         },
       ]);
 

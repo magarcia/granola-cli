@@ -177,7 +177,8 @@ export async function list(opts: ListOptions = {}): Promise<Meeting[]> {
 ```typescript
 export async function list(opts: ListOptions = {}): Promise<Folder[]> {
   const client = await getClient();
-  const folders = await fetchFolders(client as any);
+  const documentLists = await client.getDocumentLists();
+  const folders = documentLists.map(normalizeFolder);
 
   if (opts.workspace) {
     return folders.filter((folder) => folder.workspace_id === opts.workspace);
@@ -187,7 +188,7 @@ export async function list(opts: ListOptions = {}): Promise<Folder[]> {
 }
 ```
 
-`fetchFolders()` prefers the official `getDocumentLists()` client method when available. Otherwise it progressively falls back to calling `/v2/get-document-lists` and `/v1/get-document-lists` via the underlying HTTP client, normalizing the response so commands always receive consistent `Folder` objects (including `document_ids` extracted from embedded `documents`). The `get()` helper reuses the same cache to find a folder by ID.
+`getDocumentLists()` calls the unofficial `/v1/get-document-lists-metadata` endpoint with `include_document_ids: true` and `include_only_joined_lists: false`. It converts the response's `lists` object into an array. `normalizeFolder()` preserves explicit `document_ids`, falls back to embedded `documents`, and maps `is_favourited` to `is_favourite`. Optional workspace fields and `document_count` support folder display. The `get()` helper uses the same API method to find a folder by ID.
 
 ### Service Responsibilities
 
@@ -196,7 +197,7 @@ export async function list(opts: ListOptions = {}): Promise<Folder[]> {
 3. **Type Safety**: Strongly-typed interfaces for all API interactions
 4. **Business Logic**: Implement filtering, pagination, and data aggregation
 5. **ID Resolution**: Resolve partial meeting IDs to full UUIDs via prefix matching
-6. **Error Handling**: Gracefully handle failures and return sensible defaults
+6. **Error Handling**: Preserve authentication and network failures for retry or error reporting. Transcript HTTP 404 responses return an empty array.
 
 ### ID Resolution
 
@@ -417,7 +418,7 @@ interface Person {
 #### Data Flow
 
 1. **API Source**: Participant data comes from `getDocumentMetadata()` API call
-2. **Service Layer**: Data is passed through unchanged in `meetings.get()`
+2. **Service Layer**: `meetings.get()` loads the full document with `getDocumentsBatch()`, then merges `creator` and `attendees` from `getDocumentMetadata()`. The document keeps its ID, title, dates, and content. Missing optional metadata does not hide the document.
 3. **Command Layer**: Display formatting happens in `view.ts` and `export.ts`
 
 #### Display Format
@@ -431,7 +432,7 @@ Attendees:    2 participant(s)
               - Bob Wilson
 ```
 
-The `meeting export` command includes the full `people` object in JSON output.
+The `meeting export` command includes `meeting.people` in JSON output. When that object is absent, it builds `people` from the meeting's top-level `creator` and `attendees` metadata.
 
 ## Output System
 
@@ -632,6 +633,7 @@ export async function getCredentials(): Promise<Credentials | null> {
     const parsed = JSON.parse(stored);
     return {
       refreshToken: parsed.refreshToken,
+      accessToken: parsed.accessToken || '',
       clientId: parsed.clientId,
     };
   } catch {
@@ -653,31 +655,24 @@ Credentials are stored as JSON:
 ```json
 {
   "refreshToken": "...",
+  "accessToken": "...",
   "clientId": "client_GranolaMac"
 }
 ```
 
-### Supabase JSON Parsing
+### Sign-in and session validation
 
-The `login` command can import credentials from Supabase JSON:
+`auth login` reuses an existing session after `getAuthenticatedCredentials()` validates it with `POST /v1/get-user-info`. Rejected access tokens trigger refresh through `POST /v1/refresh-access-token`. Refresh sends the current access token as a Bearer token and `{ refresh_token }` as the body. The CLI validates the refresh response and saves rotated credentials under the existing file lock.
 
-```typescript
-export function parseSupabaseJson(json: string): Credentials | null {
-  try {
-    const parsed = JSON.parse(json);
-    if (!parsed.refresh_token) return null;
+If no valid session exists, login tries the legacy `supabase.json` store. `parseSupabaseJson()` supports stringified WorkOS or Cognito tokens and root-level legacy tokens. Login validates imports before storage.
 
-    return {
-      refreshToken: parsed.refresh_token,
-      clientId: parsed.client_id || DEFAULT_CLIENT_ID,
-    };
-  } catch {
-    return null;
-  }
-}
-```
+When import cannot supply valid credentials, `lib/browser-auth.ts` creates an independent PKCE sign-in. Google is the default provider, and `--provider microsoft` selects Microsoft. The helper obtains the final browser address and validates the sign-in state before exchanging the one-time code. `--browser` starts a new sign-in immediately.
 
-This allows users to paste the JSON object from their browser's local storage.
+On macOS, browser sign-in opens Chrome by default. `lib/chrome-callback.ts` polls all Chrome windows through AppleScript for a Granola redirect containing this sign-in's state. Each query has a ten-second timeout. Detection requires macOS Automation permission and stops on completion, cancellation, failure, or after one minute. Failure or timeout opens the manual prompt without printing process details. The five-minute sign-in deadline includes both detection and manual input. `--no-auto-callback` skips detection and opens the default browser. Other platforms use manual paste.
+
+The verifier stays in memory. Authentication requests have a 15-second timeout, and the prompt expires after five minutes. The CLI does not decrypt desktop credential stores. After validation, login saves the session under the same lock used by token refresh. Browser interaction stays outside the lock.
+
+`auth status` reports authentication only after server validation. Verification and refresh outages produce errors.
 
 ## Alias System
 
@@ -809,10 +804,10 @@ Setup file at `tests/setup.ts` provides common test utilities and global mocks.
 
 ```bash
 # Watch mode
-npm test
+npm run test:watch
 
 # Single run
-npm run test:run
+npm test
 
 # With coverage
 npm run test:coverage

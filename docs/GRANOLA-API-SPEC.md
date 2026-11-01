@@ -2,7 +2,7 @@
 
 **Version:** 1.1
 **Base URL:** `https://api.granola.ai`
-**Authentication:** OAuth 2.0 with refresh token rotation (via WorkOS)
+**Authentication:** Browser PKCE sign-in with refresh token rotation through Granola
 **Status:** Reverse-engineered (unofficial)
 
 > **Disclaimer:** This specification was created through reverse engineering of the Granola desktop application and API traffic analysis. It is not official documentation and may become outdated as Granola updates their API. Use at your own risk.
@@ -19,7 +19,7 @@
 6. [Error Handling](#error-handling)
 7. [Rate Limiting](#rate-limiting)
 8. [Best Practices](#best-practices)
-9. [Appendix: Token Extraction Guide](#appendix-token-extraction-guide)
+9. [Appendix: CLI Sign-in](#appendix-cli-sign-in)
 10. [Version History](#version-history)
 11. [Appendix: Session Preservation](#appendix-session-preservation)
 12. [Credits](#credits)
@@ -54,70 +54,43 @@ This specification was derived through analysis of:
 
 ## Authentication
 
-### OAuth 2.0 Flow
+### Browser sign-in
 
-Granola uses WorkOS for authentication with automatic refresh token rotation.
+The CLI uses an independent browser sign-in with PKCE. These endpoints belong to Granola's unofficial desktop API. They are separate from the official public API and its API keys.
 
-#### Token Storage Location (macOS)
+1. The CLI generates an in-memory verifier, its SHA-256 challenge, and a sign-in state.
+2. It opens `/v1/auth` with the challenge, state, and Google or Microsoft provider.
+3. After authentication, the CLI reads the final `https://granola.ai/app-redirect` address from Chrome on macOS with Automation permission. If detection fails or takes more than one minute, it asks the user to copy and paste the address. Other platforms use manual paste.
+4. The CLI checks the redirect's state, then exchanges its code and verifier at `POST /v1/workos-auth-complete`.
+5. It validates the returned credentials with `POST /v1/get-user-info`, then stores them in the system keychain.
 
-Tokens are stored locally by the Granola desktop application at:
+Authentication requests have a 15-second timeout. The interactive prompt expires after five minutes. The verifier and redirect code are not stored on disk.
 
-```
-~/Library/Application Support/Granola/supabase.json
-```
+### Legacy credential import
 
-**File Structure:**
-```json
-{
-  "workos_tokens": "{\"access_token\":\"...\",\"refresh_token\":\"...\",\"expires_in\":3600,...}",
-  "session_id": "...",
-  "user_info": "{...}"
-}
-```
+Older desktop installations can provide plaintext credentials at `~/Library/Application Support/Granola/supabase.json`. The `workos_tokens` property contains a JSON string with the access and refresh tokens. The CLI parses that string and validates the credentials with Granola before saving them.
 
-> **Note:** The `workos_tokens` field contains a JSON string (escaped), not a JSON object. It must be parsed twice to extract the tokens.
+The CLI does not decrypt `supabase.json.enc` or `stored-accounts.json.enc`. Browser sign-in works independently of desktop credential files.
 
-#### Authentication Flow
+### Credential validation
 
-1. **Initial Authentication**: Obtain `refresh_token` and `client_id` from the Granola desktop app's token storage
-2. **Access Token Exchange**: Exchange refresh token for short-lived access token via WorkOS
-3. **Token Rotation**: Each exchange invalidates the old refresh token and issues a new one
+`POST /v1/get-user-info` uses the access token as a Bearer token. HTTP 401 indicates an invalid session. Other failed responses or network errors are verification failures.
 
-#### Extracting Tokens
+`granola auth status` validates the stored session and attempts token refresh after a rejected access token.
 
-**Extract refresh_token using jq:**
-```bash
-cat ~/Library/Application\ Support/Granola/supabase.json | \
-  jq -r '.workos_tokens | fromjson | .refresh_token'
-```
+### Refresh access token
 
-**Extract client_id from the JWT access token:**
-```bash
-cat ~/Library/Application\ Support/Granola/supabase.json | \
-  jq -r '.workos_tokens | fromjson | .access_token' | \
-  cut -d. -f2 | base64 -d 2>/dev/null | jq -r '.iss' | \
-  grep -o 'client_[^"]*'
-```
-
-The `client_id` is embedded in the JWT's `iss` (issuer) claim:
-```
-https://auth.granola.ai/user_management/client_XXXXX
-```
-
-#### Refresh Access Token
-
-**Endpoint:** `POST https://api.workos.com/user_management/authenticate`
+**Endpoint:** `POST https://api.granola.ai/v1/refresh-access-token`
 
 **Request Headers:**
 ```http
 Content-Type: application/json
+Authorization: Bearer <current-access-token>
 ```
 
 **Request Body:**
 ```json
 {
-  "client_id": "client_01J9ABC...",
-  "grant_type": "refresh_token",
   "refresh_token": "22oWVolI9TRlthI2J5asHbfyx"
 }
 ```
@@ -132,35 +105,17 @@ Content-Type: application/json
 }
 ```
 
-#### Token Rotation (CRITICAL)
+### Token rotation
 
-⚠️ **IMPORTANT**: Refresh tokens cannot be reused. Each token is valid for **ONE use only**.
+Refresh tokens rotate. The CLI re-reads credentials inside a file lock, validates the refresh response, and saves new tokens immediately. It retains the current refresh token if the response omits a replacement. Login validates its new session before using the same lock for the final credential write.
 
-- Each authentication request automatically invalidates the old refresh token
-- You **MUST** save the new `refresh_token` from the response for subsequent requests
-- Attempting to reuse an old refresh token will result in authentication failure
-- This prevents token replay attacks
-- Access tokens expire after **3600 seconds (1 hour)**
-
-#### Token Lifecycle Management
-
-**Recommended Practice:**
-- Refresh tokens every **~5 minutes** to maintain session continuity
-- Store the new refresh token immediately after each authentication
-- Implement automatic token refresh before access token expiration
-
-**Token Storage Update (Pseudocode):**
-```
-# After successful authentication
-config.refresh_token = response.refresh_token
-save_config(config)  # Persist immediately
-```
+API operations attempt refresh after HTTP 401 and retry once with the new access token. Manual notes, enhanced notes, and transcript requests preserve HTTP 401 errors so they can reach this recovery path. A missing transcript, reported as HTTP 404, returns an empty array. Missing notes return null. Network and server errors propagate.
 
 ---
 
 ## API Endpoints
 
-All API endpoints require Bearer token authentication and standard headers.
+Authenticated API endpoints require Bearer token authentication and standard headers. The browser code exchange starts without an access token.
 
 ### Standard Request Headers
 
@@ -273,48 +228,30 @@ Document lists are Granola's folder system for organizing documents within works
 
 Retrieves all document lists (folders) accessible to the user.
 
-**Endpoint (v2 - Preferred):** `POST /v2/get-document-lists`  
-**Endpoint (v1 - Fallback):** `POST /v1/get-document-lists`
+**Endpoint:** `POST /v1/get-document-lists-metadata`
 
 **Request Body:**
 ```json
-{}
+{
+  "include_document_ids": true,
+  "include_only_joined_lists": false
+}
 ```
 
-**Response (v2):**
+**Response:**
 ```json
-[
-  {
-    "id": "9f3d3537-e001-401e-8ce6-b7af6f24a450",
-    "title": "Sales calls",
-    "workspace_id": "924ba459-d11d-4da8-88c8-789979794744",
-    "owner_id": "user_01J9ABC...",
-    "created_at": "2025-10-17T11:28:08.183Z",
-    "is_favourite": false,
-    "documents": [
-      {
-        "id": "doc_123",
-        "title": "Client Meeting - Acme Corp",
-        "created_at": "2025-10-17T14:30:00.000Z"
-      }
-    ]
+{
+  "lists": {
+    "9f3d3537-e001-401e-8ce6-b7af6f24a450": {
+      "id": "9f3d3537-e001-401e-8ce6-b7af6f24a450",
+      "title": "Sales calls",
+      "created_at": "2025-10-17T11:28:08.183Z",
+      "is_favourited": false,
+      "document_count": 2,
+      "document_ids": ["doc_123", "doc_456"]
+    }
   }
-]
-```
-
-**Response (v1):**
-```json
-[
-  {
-    "id": "9f3d3537-e001-401e-8ce6-b7af6f24a450",
-    "name": "Sales calls",
-    "workspace_id": "924ba459-d11d-4da8-88c8-789979794744",
-    "owner_id": "user_01J9ABC...",
-    "created_at": "2025-10-17T11:28:08.183Z",
-    "is_favourite": false,
-    "document_ids": ["doc_123", "doc_456"]
-  }
-]
+}
 ```
 
 **Response Fields:**
@@ -322,18 +259,20 @@ Retrieves all document lists (folders) accessible to the user.
 | Field | Type | Description |
 |-------|------|-------------|
 | `id` | string | Unique list identifier (UUID) |
-| `title` / `name` | string | List name (v2/v1 respectively) |
-| `workspace_id` | string | Parent workspace ID |
-| `owner_id` | string | User ID of list creator |
+| `title` / `name` | string | List name |
+| `workspace_id` | string, optional | Parent workspace ID |
+| `workspace_display_name` | string, optional | Workspace name for display |
+| `owner_id` | string, optional | User ID of list creator |
 | `created_at` | ISO8601 | List creation timestamp |
-| `is_favourite` | boolean | User's favourite status |
-| `documents` | array | Full document objects (v2 only) |
-| `document_ids` | array | Document ID strings (v1 only) |
+| `is_favourited` | boolean, optional | User's favourite status |
+| `document_count` | number, optional | Number of documents in the folder |
+| `document_ids` | array | Document ID strings requested with `include_document_ids` |
 
 **Notes:**
-- Try v2 endpoint first, fallback to v1 if not available
-- v2 returns full document objects; v1 returns only IDs
-- Use v1 response with `/v1/get-documents-batch` to fetch full documents
+- The response's `lists` property is an object keyed by folder ID.
+- The CLI preserves explicit `document_ids`, with embedded `documents` as a fallback when IDs are absent.
+- The service maps `is_favourited` to the published `Folder.is_favourite` property.
+- Use `/v1/get-documents-batch` to fetch full documents for the returned IDs.
 - A document can belong to multiple lists
 
 ---
@@ -500,7 +439,7 @@ Fetch multiple documents by their IDs. **This is the recommended method for fetc
 - Batch size limit: typically 100 documents per request
 - Response may use `documents` or `docs` field name depending on API version
 - **Recommended workflow for folders:**
-  1. Use `/v2/get-document-lists` to get folder contents (returns document IDs)
+  1. Use `/v1/get-document-lists-metadata` with `include_document_ids: true` to get folder document IDs
   2. Use `/v1/get-documents-batch` to fetch actual documents (including shared ones)
 
 ---
@@ -880,15 +819,22 @@ interface WorkspaceResponse {
 
 ```typescript
 interface DocumentList {
-  id: string;                     // UUID
-  title?: string;                 // v2 field
-  name?: string;                  // v1 field
-  workspace_id: string;           // Parent workspace
-  owner_id: string;               // Creator user ID
-  created_at: string;             // ISO8601 timestamp
-  is_favourite: boolean;          // User's favourite status
-  documents?: Document[];         // v2: Full document objects
-  document_ids?: string[];        // v1: Document IDs only
+  id: string;
+  title?: string;
+  name?: string;
+  workspace_id?: string;
+  workspace_display_name?: string;
+  owner_id?: string;
+  created_at: string;
+  is_favourite?: boolean;
+  is_favourited?: boolean;
+  document_count?: number;
+  documents?: Array<{ id: string }>;
+  document_ids?: string[];
+}
+
+interface DocumentListsResponse {
+  lists: Record<string, DocumentList>;
 }
 ```
 
@@ -1072,6 +1018,8 @@ for await (const doc of client.listAllDocuments({ workspace_id: 'id' })) {
 ```
 
 **Token Extraction Utility:**
+
+This helper applies to legacy plaintext desktop stores. Current CLI sign-in uses the browser flow described under [Authentication](#authentication).
 
 ```typescript
 import { extractGranolaToken } from 'granola-ts-client/utils';
@@ -1265,7 +1213,7 @@ async function fetchWithBackoff(fetchFn: () => Promise<any>, maxRetries = 3) {
 ### 1. Token Management
 
 **✅ DO:**
-- Refresh access tokens every ~5 minutes to maintain session continuity
+- Refresh a rejected access token through Granola's refresh endpoint, then retry once
 - Save new refresh tokens immediately after each authentication
 - Implement automatic token refresh before expiration
 - Store tokens securely (environment variables, secure storage)
@@ -1399,45 +1347,21 @@ for (let i = 0; i < docIds.length; i += batchSize) {
 
 ---
 
-## Appendix: Token Extraction Guide
+## Appendix: CLI Sign-in
 
-### Extract from Granola Desktop App (macOS)
+Run `granola auth login` to reuse a valid CLI session, import valid legacy desktop credentials, or start browser sign-in.
 
-**Location:**
+To create a new independent session:
+
 ```bash
-~/Library/Application Support/Granola/supabase.json
+granola auth login --browser
 ```
 
-**File Structure:**
-```json
-{
-  "workos_tokens": "{\"access_token\":\"...\",\"refresh_token\":\"...\",\"expires_in\":3600,...}",
-  "session_id": "...",
-  "user_info": "{...}"
-}
-```
+Use `--provider microsoft` for Microsoft authentication. Google is the default provider.
 
-**Extract Refresh Token:**
-```bash
-cat ~/Library/Application\ Support/Granola/supabase.json | \
-  jq -r '.workos_tokens | fromjson | .refresh_token'
-```
+On macOS, browser sign-in opens Chrome and reads the matching callback from any Chrome window by default. Allow macOS Automation permission and leave the final **Opening Granola** page open. If detection fails or takes more than one minute, paste the final browser address when asked. Use `--no-auto-callback` to skip detection and open the default browser. Other platforms use manual paste.
 
-**Extract Client ID from JWT:**
-```bash
-cat ~/Library/Application\ Support/Granola/supabase.json | \
-  jq -r '.workos_tokens | fromjson | .access_token' | \
-  cut -d. -f2 | base64 -d 2>/dev/null | \
-  jq -r '.iss' | grep -o 'client_[^"]*'
-```
-
-**Preserve Session:**
-1. Login to Granola app
-2. Extract tokens from `supabase.json`
-3. Quit Granola (Cmd+Q)
-4. Remove app data: `rm -rf ~/Library/Application\ Support/Granola/`
-5. Use extracted tokens in your application
-6. Refresh tokens every ~5 minutes to maintain session
+The CLI stores its credentials in the OS keychain. Desktop app data does not need to change.
 
 ---
 
@@ -1454,28 +1378,11 @@ cat ~/Library/Application\ Support/Granola/supabase.json | \
 
 ## Appendix: Session Preservation
 
-### Preventing Token Invalidation
+### Independent CLI sessions
 
-When the Granola desktop app starts, it may invalidate existing tokens. To preserve your extracted tokens for programmatic access:
+Browser sign-in creates a session for the CLI, so token rotation does not depend on importing the desktop app's current refresh token. Keep rotated credentials in the keychain and use `granola auth status` to verify the session.
 
-1. **Login to Granola app** to generate a valid session
-2. **Extract tokens** from `supabase.json` (see [Token Storage Location](#token-storage-location-macos))
-3. **Quit Granola completely** (Cmd+Q on macOS)
-4. **Remove application data** to prevent session conflicts:
-   ```bash
-   rm -rf ~/Library/Application\ Support/Granola/
-   ```
-
-**Why this works:** Once you remove the Granola app data, the app cannot invalidate your extracted refresh token when it starts again. Your script will keep the token alive through continuous rotation.
-
-### Keeping Sessions Alive
-
-Refresh tokens every ~5 minutes to maintain session continuity. Implement a background process or scheduler that periodically calls the token refresh endpoint.
-
-**Why ~5 minutes?** While access tokens last 1 hour, refreshing frequently ensures:
-- The refresh token doesn't expire from inactivity
-- You always have a fresh, valid token
-- Your session stays active even if Granola's backend has shorter session timeouts
+If Granola rejects both the access token and the refresh token, run `granola auth login --browser` to sign in again.
 
 ---
 

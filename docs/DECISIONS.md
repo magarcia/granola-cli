@@ -393,17 +393,15 @@ const config = new Conf<Config>({
 - **Security:** Acceptable for non-sensitive data (aliases, preferences)
 - **Credentials:** Handled separately via OS keychain (secure)
 
-### No Token Refresh Mechanism
+### Independent sign-in and token refresh
 
-**Issue:** No automatic token refresh when expired
+The CLI uses browser PKCE sign-in to create its own session. Legacy desktop credentials can still be imported after server validation. Browser sign-in works independently of encrypted desktop stores and the desktop app's token rotation.
 
-**Current approach:** User must re-authenticate manually
+Granola's `/v1/refresh-access-token` endpoint renews rejected access tokens. A file lock serializes refreshes, and the CLI saves rotated credentials immediately. `auth status` validates the session with `/v1/get-user-info` rather than checking only whether a keychain entry exists.
 
-**Trade-offs:**
-- **Simplicity:** Fewer edge cases and error states
-- **Robustness:** Better UX would handle refresh automatically
-- **Security:** Short-lived sessions may be more secure
-- **Future work:** Can add token refresh without breaking changes
+This uses unofficial desktop API endpoints, which can change. It preserves the existing CLI commands without requiring the paid-plan API keys used by Granola's separate public API. Browser sign-in requires an interactive terminal. On macOS, Chrome callback detection runs first, with manual paste as a fallback. Other platforms use manual paste.
+
+Contributor investigations in [#1](https://github.com/magarcia/granola-cli/pull/1), [#4](https://github.com/magarcia/granola-cli/pull/4), [#6](https://github.com/magarcia/granola-cli/pull/6), and [#8](https://github.com/magarcia/granola-cli/pull/8) informed the folder response and authentication fixes.
 
 ### No Built-in Update Mechanism
 

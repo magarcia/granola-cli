@@ -185,48 +185,62 @@ describe('api client', () => {
   });
 
   describe('getDocumentLists', () => {
-    it('should call POST /v2/get-document-lists', async () => {
-      vi.mocked(mockHttpClient.post).mockResolvedValue([]);
+    it('should request folder metadata with document IDs', async () => {
+      vi.mocked(mockHttpClient.post).mockResolvedValue({ lists: {} });
 
       await api.getDocumentLists();
 
-      expect(mockHttpClient.post).toHaveBeenCalledWith('/v2/get-document-lists', {});
+      expect(mockHttpClient.post).toHaveBeenCalledWith('/v1/get-document-lists-metadata', {
+        include_document_ids: true,
+        include_only_joined_lists: false,
+      });
     });
 
-    it('should return the folders array', async () => {
-      const mockFolders = [
-        {
+    it('should return folders from the keyed metadata response', async () => {
+      const mockFolders = {
+        'folder-1': {
           id: 'folder-1',
           title: 'Sales calls',
           workspace_id: 'ws-123',
-          documents: [{ id: 'doc-1', title: 'Meeting 1' }],
+          document_ids: ['doc-1'],
         },
-      ];
-      vi.mocked(mockHttpClient.post).mockResolvedValue(mockFolders);
+      };
+      vi.mocked(mockHttpClient.post).mockResolvedValue({ lists: mockFolders });
 
       const result = await api.getDocumentLists();
 
-      expect(result).toEqual(mockFolders);
+      expect(result).toEqual([mockFolders['folder-1']]);
+    });
+
+    it('should return an empty array when no folders exist', async () => {
+      vi.mocked(mockHttpClient.post).mockResolvedValue({ lists: {} });
+
+      expect(await api.getDocumentLists()).toEqual([]);
     });
   });
 
   describe('getDocumentList', () => {
     it('should fetch folders and find the matching one', async () => {
-      const mockFolders = [
-        { id: 'folder-1', title: 'Sales', document_ids: ['doc-1'] },
-        { id: 'folder-2', title: 'Support', document_ids: ['doc-2'] },
-      ];
-      vi.mocked(mockHttpClient.post).mockResolvedValue(mockFolders);
+      const mockFolders = {
+        'folder-1': { id: 'folder-1', title: 'Sales', document_ids: ['doc-1'] },
+        'folder-2': { id: 'folder-2', title: 'Support', document_ids: ['doc-2'] },
+      };
+      vi.mocked(mockHttpClient.post).mockResolvedValue({ lists: mockFolders });
 
       const result = await api.getDocumentList('folder-2');
 
-      expect(mockHttpClient.post).toHaveBeenCalledWith('/v2/get-document-lists', {});
+      expect(mockHttpClient.post).toHaveBeenCalledWith('/v1/get-document-lists-metadata', {
+        include_document_ids: true,
+        include_only_joined_lists: false,
+      });
       expect(result).toEqual({ id: 'folder-2', title: 'Support', document_ids: ['doc-2'] });
     });
 
     it('should return null when folder is not found', async () => {
-      const mockFolders = [{ id: 'folder-1', title: 'Sales', document_ids: ['doc-1'] }];
-      vi.mocked(mockHttpClient.post).mockResolvedValue(mockFolders);
+      const mockFolders = {
+        'folder-1': { id: 'folder-1', title: 'Sales', document_ids: ['doc-1'] },
+      };
+      vi.mocked(mockHttpClient.post).mockResolvedValue({ lists: mockFolders });
 
       const result = await api.getDocumentList('nonexistent');
 
@@ -234,7 +248,7 @@ describe('api client', () => {
     });
 
     it('should return null when folders array is empty', async () => {
-      vi.mocked(mockHttpClient.post).mockResolvedValue([]);
+      vi.mocked(mockHttpClient.post).mockResolvedValue({ lists: {} });
 
       const result = await api.getDocumentList('folder-1');
 

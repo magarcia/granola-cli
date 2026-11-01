@@ -1,6 +1,7 @@
-import type { GranolaApi } from '../lib/api.js';
+import type { DocumentMetadata, GranolaApi } from '../lib/api.js';
 import { createGranolaDebug } from '../lib/debug.js';
 import { applyFilters, type FilterOptions, hasActiveFilters } from '../lib/filters.js';
+import { ApiError } from '../lib/http.js';
 import type { Meeting, ProseMirrorDoc, Utterance } from '../types.js';
 import { getClient, withTokenRefresh } from './client.js';
 
@@ -49,7 +50,7 @@ async function fetchMeetingsByIds(client: GranolaApi, documentIds: string[]): Pr
 async function loadMeetingMetadata(
   client: GranolaApi,
   id: string,
-): Promise<{ notes?: any; last_viewed_panel?: { content: any } } | null> {
+): Promise<DocumentMetadata | null> {
   try {
     const metadata = await client.getDocumentMetadata(id);
     if (!metadata) {
@@ -59,7 +60,8 @@ async function loadMeetingMetadata(
     return metadata;
   } catch (err) {
     debug('getDocumentMetadata failed for %s: %O', id, err);
-    return null;
+    if (err instanceof ApiError && err.status === 404) return null;
+    throw err;
   }
 }
 
@@ -240,13 +242,25 @@ export async function get(id: string): Promise<Meeting | null> {
   return withTokenRefresh(async () => {
     debug('getting meeting: %s', id);
     const client = await getClient();
-    const metadata = await loadMeetingMetadata(client, id);
-    if (!metadata) {
+    const meeting = (await fetchMeetingsByIds(client, [id])).find((item) => item.id === id);
+    if (!meeting) {
       debug('meeting %s: not found', id);
       return null;
     }
     debug('meeting %s: found', id);
-    return { id, ...metadata } as Meeting;
+    try {
+      const metadata = await client.getDocumentMetadata(id);
+      if (!metadata) return meeting;
+      return {
+        ...metadata,
+        ...meeting,
+        creator: metadata.creator ?? meeting.creator,
+        attendees: metadata.attendees ?? meeting.attendees,
+      };
+    } catch (error) {
+      if (error instanceof ApiError && error.status === 404) return meeting;
+      throw error;
+    }
   });
 }
 
@@ -282,7 +296,8 @@ async function findMeetingViaDocuments(
       offset += NOTES_PAGE_SIZE;
     } catch (err) {
       debug('findMeetingViaDocuments error: %O', err);
-      return null;
+      if (err instanceof ApiError && err.status === 404) return null;
+      throw err;
     }
   }
 
@@ -297,7 +312,7 @@ export async function getNotes(id: string): Promise<ProseMirrorDoc | null> {
     const metadata = await loadMeetingMetadata(client, id);
     if (metadata && 'notes' in metadata) {
       debug('getNotes resolved via metadata response');
-      return (metadata.notes || null) as ProseMirrorDoc | null;
+      return metadata.notes || null;
     }
 
     const meeting = await findMeetingViaDocuments(client, id, {
@@ -318,7 +333,7 @@ export async function getEnhancedNotes(id: string): Promise<ProseMirrorDoc | nul
     const metadata = await loadMeetingMetadata(client, id);
     if (metadata && 'last_viewed_panel' in metadata) {
       debug('getEnhancedNotes resolved via metadata response');
-      return (metadata.last_viewed_panel?.content || null) as ProseMirrorDoc | null;
+      return metadata.last_viewed_panel?.content || null;
     }
 
     const meeting = await findMeetingViaDocuments(client, id, {
@@ -342,7 +357,8 @@ export async function getTranscript(id: string): Promise<Utterance[]> {
       return transcript;
     } catch (err) {
       debug('getTranscript error: %O', err);
-      return [];
+      if (err instanceof ApiError && err.status === 404) return [];
+      throw err;
     }
   });
 }

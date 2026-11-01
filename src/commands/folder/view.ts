@@ -39,7 +39,6 @@ export function createViewCommand() {
         process.exit(4);
       }
 
-      // Handle structured output formats
       const format = opts.output || null;
       if (format) {
         if (!['json', 'yaml', 'toon'].includes(format)) {
@@ -51,10 +50,13 @@ export function createViewCommand() {
       }
 
       const name = folder.name || folder.title || 'Unnamed';
-      const docCount = folder.document_ids?.length || 0;
+      const docCount = folder.document_count ?? folder.document_ids?.length ?? 0;
+      const workspace = folder.workspace_name || folder.workspace_id;
+      const details = [`${docCount} meetings`];
+      if (workspace) details.push(`Workspace ${workspace}`);
 
       console.log(chalk.bold(name));
-      console.log(chalk.dim(`${docCount} meetings · Workspace ${folder.workspace_id}`));
+      console.log(chalk.dim(details.join(' · ')));
       console.log();
       console.log(chalk.dim('Tip: Use "granola meeting list" to browse recent meetings.'));
     });

@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { deletePassword, getPassword, setPassword } from 'cross-keychain';
 import type { Credentials } from '../types.js';
 import { createGranolaDebug } from './debug.js';
+import { ApiError } from './http.js';
 import { withLock } from './lock.js';
 
 const debug = createGranolaDebug('lib:auth');
@@ -35,6 +36,7 @@ export async function getCredentials(): Promise<Credentials | null> {
 }
 
 export async function saveCredentials(creds: Credentials): Promise<void> {
+  assertValidAccessToken(creds.accessToken);
   debug('saving credentials to keychain');
   await setPassword(SERVICE_NAME, ACCOUNT_NAME, JSON.stringify(creds));
   debug('credentials saved');
@@ -46,7 +48,47 @@ export async function deleteCredentials(): Promise<void> {
   debug('credentials deleted');
 }
 
-const WORKOS_AUTH_URL = 'https://api.workos.com/user_management/authenticate';
+export async function validateCredentials(creds: Credentials): Promise<boolean> {
+  if (!creds.accessToken) return false;
+  assertValidAccessToken(creds.accessToken);
+
+  const response = await fetch('https://api.granola.ai/v1/get-user-info', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${creds.accessToken}`,
+    },
+    body: '{}',
+    signal: AbortSignal.timeout(15000),
+  });
+  await response.body?.cancel();
+
+  if (response.status === 401) return false;
+  if (!response.ok) {
+    throw new ApiError('Could not verify Granola credentials. Try again.', response.status);
+  }
+  return true;
+}
+
+export async function getAuthenticatedCredentials(): Promise<Credentials | null> {
+  const creds = await getCredentials();
+  if (!creds) return null;
+  if (await validateCredentials(creds)) return creds;
+
+  const refreshed = await refreshAccessToken();
+  return refreshed && (await validateCredentials(refreshed)) ? refreshed : null;
+}
+
+const GRANOLA_REFRESH_URL = 'https://api.granola.ai/v1/refresh-access-token';
+
+function assertValidAccessToken(accessToken: string): void {
+  try {
+    // Native header errors can include the rejected token value.
+    new Headers({ Authorization: `Bearer ${accessToken}` });
+  } catch {
+    throw new Error('Invalid Granola access token. Run granola auth login --browser.');
+  }
+}
 
 /**
  * Refreshes the access token using the stored refresh token.
@@ -56,94 +98,115 @@ const WORKOS_AUTH_URL = 'https://api.workos.com/user_management/authenticate';
  * Uses a file-based lock to prevent race conditions when multiple CLI processes
  * attempt to refresh the token simultaneously.
  *
- * @returns New credentials if refresh succeeds, null otherwise
+ * @returns New credentials, or null when the session cannot be refreshed
+ * @throws Network, protocol, keychain, or lock errors
  */
 export async function refreshAccessToken(): Promise<Credentials | null> {
   debug('attempting token refresh');
 
-  try {
-    return await withLock(async () => {
-      // Re-read credentials inside the lock - another process may have updated them
-      const creds = await getCredentials();
-      if (!creds?.refreshToken || !creds?.clientId) {
-        debug('cannot refresh: missing refreshToken or clientId');
-        return null;
-      }
+  return withLock(async () => {
+    const creds = await getCredentials();
+    if (!creds?.refreshToken) {
+      debug('cannot refresh: missing refreshToken');
+      return null;
+    }
 
-      const response = await fetch(WORKOS_AUTH_URL, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          client_id: creds.clientId,
-          grant_type: 'refresh_token',
-          refresh_token: creds.refreshToken,
-        }),
-      });
-
-      if (!response.ok) {
-        debug('token refresh failed: %d %s', response.status, response.statusText);
-        return null;
-      }
-
-      const data = (await response.json()) as { refresh_token: string; access_token: string };
-      const newCreds: Credentials = {
-        refreshToken: data.refresh_token,
-        accessToken: data.access_token,
-        clientId: creds.clientId,
-      };
-
-      await saveCredentials(newCreds);
-      debug('token refresh successful, new credentials saved');
-      return newCreds;
+    assertValidAccessToken(creds.accessToken);
+    const response = await fetch(GRANOLA_REFRESH_URL, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${creds.accessToken}`,
+      },
+      signal: AbortSignal.timeout(15000),
+      body: JSON.stringify({ refresh_token: creds.refreshToken }),
     });
-  } catch (error) {
-    debug('token refresh error: %O', error);
-    return null;
-  }
+
+    if (!response.ok) {
+      await response.body?.cancel();
+      if ([400, 401, 403].includes(response.status)) return null;
+      throw new ApiError('Could not refresh the Granola session. Try again.', response.status);
+    }
+
+    let data: unknown;
+    try {
+      data = await response.json();
+    } catch {
+      throw new Error('Granola returned invalid credentials during token refresh.');
+    }
+    if (
+      !data ||
+      typeof data !== 'object' ||
+      !('access_token' in data) ||
+      typeof data.access_token !== 'string' ||
+      !data.access_token ||
+      ('refresh_token' in data && (typeof data.refresh_token !== 'string' || !data.refresh_token))
+    ) {
+      throw new Error('Granola returned invalid credentials during token refresh.');
+    }
+    const newCreds: Credentials = {
+      refreshToken:
+        'refresh_token' in data && typeof data.refresh_token === 'string'
+          ? data.refresh_token
+          : creds.refreshToken,
+      accessToken: data.access_token,
+      clientId: creds.clientId || DEFAULT_CLIENT_ID,
+    };
+
+    await saveCredentials(newCreds);
+    debug('token refresh successful, new credentials saved');
+    return newCreds;
+  });
+}
+
+function parseTokenValues(value: unknown): Credentials | null {
+  const tokens: unknown = typeof value === 'string' ? JSON.parse(value) : value;
+  if (!tokens || typeof tokens !== 'object' || Array.isArray(tokens)) return null;
+  if ('access_token' in tokens && typeof tokens.access_token !== 'string') return null;
+  if ('refresh_token' in tokens && typeof tokens.refresh_token !== 'string') return null;
+  if ('client_id' in tokens && typeof tokens.client_id !== 'string') return null;
+
+  const accessToken =
+    'access_token' in tokens && typeof tokens.access_token === 'string' ? tokens.access_token : '';
+  const refreshToken =
+    'refresh_token' in tokens && typeof tokens.refresh_token === 'string'
+      ? tokens.refresh_token
+      : '';
+  if (!accessToken && !refreshToken) return null;
+
+  return {
+    refreshToken,
+    accessToken,
+    clientId:
+      'client_id' in tokens && typeof tokens.client_id === 'string' && tokens.client_id
+        ? tokens.client_id
+        : DEFAULT_CLIENT_ID,
+  };
 }
 
 export function parseSupabaseJson(json: string): Credentials | null {
-  debug('parsing supabase.json');
+  debug('parsing credentials');
   try {
-    const parsed = JSON.parse(json);
+    const parsed: unknown = JSON.parse(json);
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return null;
 
-    // Try WorkOS tokens first (newer auth system)
-    if (parsed.workos_tokens && typeof parsed.workos_tokens === 'string') {
-      const workosTokens = JSON.parse(parsed.workos_tokens);
-      if (workosTokens.access_token) {
-        debug('found WorkOS tokens');
-        return {
-          refreshToken: workosTokens.refresh_token || '',
-          accessToken: workosTokens.access_token,
-          clientId: workosTokens.client_id || DEFAULT_CLIENT_ID,
-        };
-      }
+    if ('workos_tokens' in parsed) {
+      const workos = parseTokenValues(parsed.workos_tokens);
+      if (workos?.accessToken) return workos;
+    }
+    if ('tokens' in parsed) {
+      const tokens = parseTokenValues(parsed.tokens);
+      if (tokens?.accessToken) return tokens;
+    }
+    if ('cognito_tokens' in parsed) {
+      const cognito = parseTokenValues(parsed.cognito_tokens);
+      if (cognito?.refreshToken) return cognito;
     }
 
-    // Fall back to Cognito tokens
-    if (parsed.cognito_tokens && typeof parsed.cognito_tokens === 'string') {
-      const cognitoTokens = JSON.parse(parsed.cognito_tokens);
-      if (!cognitoTokens.refresh_token) return null;
-
-      debug('found Cognito tokens');
-      return {
-        refreshToken: cognitoTokens.refresh_token,
-        accessToken: cognitoTokens.access_token || '',
-        clientId: cognitoTokens.client_id || DEFAULT_CLIENT_ID,
-      };
-    }
-
-    // Legacy format: refresh_token at root level
-    if (!parsed.refresh_token) return null;
-
-    debug('found legacy token format');
-    return {
-      refreshToken: parsed.refresh_token,
-      accessToken: parsed.access_token || '',
-      clientId: parsed.client_id || DEFAULT_CLIENT_ID,
-    };
-  } catch (error) {
-    debug('failed to parse supabase.json: %O', error);
+    const legacy = parseTokenValues(parsed);
+    return legacy?.refreshToken ? legacy : null;
+  } catch {
+    debug('could not parse credentials');
     return null;
   }
 }
@@ -170,7 +233,6 @@ export function getDefaultSupabasePath(): string {
       );
       break;
     default:
-      // Linux and other Unix-like systems
       path = join(home, '.config', 'granola', 'supabase.json');
   }
   debug('platform: %s, supabase path: %s', os, path);

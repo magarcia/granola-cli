@@ -19,13 +19,23 @@ Granola CLI uses platform-native secure storage for credentials via the `cross-k
 - Account: `credentials`
 - Format: JSON containing `refreshToken`, `accessToken`, and `clientId`
 
-### Credential Import
+### Sign-in and validation
 
-The CLI supports importing credentials from the Granola desktop application:
+`granola auth login` first validates an existing CLI session. If no valid session exists, it can import credentials from an older desktop installation:
 
 - **Source**: `~/Library/Application Support/Granola/supabase.json`
 - **Format**: Supabase JSON format
-- **Process**: Parses and validates required fields before storing in keychain
+- **Process**: Parses credentials, validates them with `POST /v1/get-user-info`, then stores them in the keychain
+
+When no valid import is available, the CLI starts browser sign-in with PKCE. `--browser` forces a new sign-in, and `--provider google|microsoft` selects the provider. The CLI keeps the verifier in memory and checks that the redirect address contains the matching sign-in state before exchanging its one-time code. New credentials are validated before storage.
+
+On macOS, browser sign-in opens Chrome and tries to read its callback through AppleScript by default. This requires macOS Automation permission. The script searches all Chrome windows and returns only a Granola redirect containing the current sign-in state. The CLI validates its origin, path, and state before exchanging the code. It does not log detected URLs or script errors. If detection fails, permission is denied, or no callback arrives within one minute, the CLI asks for manual paste. `--no-auto-callback` skips detection and opens the default browser. Other platforms use manual paste.
+
+The prompt expires after five minutes. Authentication requests have a 15-second timeout. The CLI does not decrypt the desktop app's encrypted stores or require deletion of desktop app data.
+
+`auth status` validates the session with Granola and attempts refresh when the access token is rejected. A rejected session reports unauthenticated. Network, server, and protocol failures produce errors.
+
+These authentication endpoints belong to Granola's unofficial desktop API, which this CLI uses. They are separate from Granola's official public API and its API keys.
 
 ### Token Refresh
 
@@ -34,7 +44,7 @@ The CLI automatically handles token expiration:
 **Location**: `lib/auth.ts`, `lib/lock.ts`, `services/client.ts`
 
 **How it works:**
-- `refreshAccessToken()` calls WorkOS API to refresh expired tokens
+- `refreshAccessToken()` calls Granola's backend to refresh expired tokens
 - `withTokenRefresh()` wrapper automatically retries operations on 401 errors
 - All API-calling service methods are wrapped with automatic token refresh
 - New credentials are saved immediately after refresh
@@ -44,13 +54,13 @@ The CLI automatically handles token expiration:
 2. `withTokenRefresh` catches the error and calls `refreshAccessToken()`
 3. File-based lock is acquired to prevent race conditions (via `lib/lock.ts`)
 4. Credentials are re-read inside the lock (another process may have updated them)
-5. CLI sends refresh request to `https://api.workos.com/user_management/authenticate`
-6. WorkOS returns new `access_token` and rotated `refresh_token`
+5. CLI posts `{ "refresh_token": "..." }` to `https://api.granola.ai/v1/refresh-access-token` with the current Bearer access token
+6. Granola returns a new `access_token` and a rotated `refresh_token`
 7. New credentials are saved to keychain
 8. Lock is released
 9. Original operation is retried with fresh token
 
-**Important**: WorkOS refresh tokens are **single-use**. Each refresh invalidates the previous token and issues a new one. The CLI uses file-based locking to prevent race conditions when multiple CLI processes attempt to refresh the token simultaneously.
+Refresh tokens rotate. The CLI validates refresh responses and saves new credentials immediately. File-based locking prevents multiple CLI processes from refreshing the same stored token concurrently.
 
 ### Race Condition Prevention
 
@@ -68,6 +78,10 @@ The CLI prevents this using file-based locking:
 - 30-second timeout waiting for lock
 - Stale lock cleanup after 60 seconds
 - Credentials are re-read inside the lock to use any updates from other processes
+
+Login uses this same lock for the final credential write after validation. Browser interaction stays outside the lock. An ongoing refresh finishes before login replaces the session.
+
+Malformed access tokens are rejected with a fixed error message before they can appear in a native HTTP header error or be saved to the keychain.
 
 ## Configuration Storage
 

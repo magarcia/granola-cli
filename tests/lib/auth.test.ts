@@ -31,12 +31,14 @@ import * as crossKeychain from 'cross-keychain';
 // Import auth module after mocking
 import {
   deleteCredentials,
+  getAuthenticatedCredentials,
   getCredentials,
   getDefaultSupabasePath,
   loadCredentialsFromFile,
   parseSupabaseJson,
   refreshAccessToken,
   saveCredentials,
+  validateCredentials,
 } from '../../src/lib/auth.js';
 import { withLock } from '../../src/lib/lock.js';
 
@@ -108,6 +110,15 @@ describe('auth', () => {
   });
 
   describe('saveCredentials', () => {
+    it('rejects malformed access tokens before storing them', async () => {
+      const creds = {
+        accessToken: 'private-token\ninvalid',
+        refreshToken: 'refresh',
+        clientId: 'client',
+      };
+      await expect(saveCredentials(creds)).rejects.toThrow('Invalid Granola access token.');
+      expect(crossKeychain.setPassword).not.toHaveBeenCalled();
+    });
     it('should save credentials to keychain', async () => {
       vi.mocked(crossKeychain.setPassword).mockResolvedValue(undefined);
 
@@ -139,6 +150,103 @@ describe('auth', () => {
     });
   });
 
+  describe('credential validation', () => {
+    const mockFetch = vi.fn();
+    const creds = { accessToken: 'access', refreshToken: 'refresh', clientId: 'client' };
+
+    beforeEach(() => {
+      globalThis.fetch = mockFetch;
+      mockFetch.mockReset();
+      vi.mocked(crossKeychain.getPassword).mockResolvedValue(JSON.stringify(creds));
+      vi.mocked(crossKeychain.setPassword).mockResolvedValue(undefined);
+    });
+
+    it('validates the access token against Granola', async () => {
+      mockFetch.mockResolvedValue({ ok: true, status: 200 });
+
+      expect(await validateCredentials(creds)).toBe(true);
+      expect(mockFetch).toHaveBeenCalledWith(
+        'https://api.granola.ai/v1/get-user-info',
+        expect.objectContaining({
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', Authorization: 'Bearer access' },
+          body: '{}',
+        }),
+      );
+    });
+
+    it('rejects an expired token', async () => {
+      mockFetch.mockResolvedValue({ ok: false, status: 401 });
+      expect(await validateCredentials(creds)).toBe(false);
+    });
+
+    it.each([
+      '\n',
+      '\0',
+      '\u0100',
+    ])('does not expose malformed access tokens containing %j', async (separator) => {
+      mockFetch.mockImplementation((_url, options) => {
+        new Headers(options.headers);
+        return { ok: true, status: 200 };
+      });
+      await expect(
+        validateCredentials({ ...creds, accessToken: `private-token${separator}invalid` }),
+      ).rejects.toThrow('Invalid Granola access token.');
+      expect(mockFetch).not.toHaveBeenCalled();
+    });
+
+    it('does not report network failures as logged out', async () => {
+      mockFetch.mockRejectedValue(new Error('fetch failed'));
+      await expect(validateCredentials(creds)).rejects.toThrow('fetch failed');
+    });
+
+    it('does not report server failures as logged out', async () => {
+      mockFetch.mockResolvedValue({ ok: false, status: 503 });
+      await expect(validateCredentials(creds)).rejects.toMatchObject({ status: 503 });
+    });
+
+    it('returns an authenticated stored session only after server validation', async () => {
+      mockFetch.mockResolvedValue({ ok: true, status: 200 });
+      expect(await getAuthenticatedCredentials()).toEqual(creds);
+    });
+
+    it('returns null when no credentials are stored', async () => {
+      vi.mocked(crossKeychain.getPassword).mockResolvedValue(null);
+      expect(await getAuthenticatedCredentials()).toBeNull();
+      expect(mockFetch).not.toHaveBeenCalled();
+    });
+
+    it('recovers an expired session and persists the rotated tokens', async () => {
+      mockFetch
+        .mockResolvedValueOnce({ ok: false, status: 401 })
+        .mockResolvedValueOnce({
+          ok: true,
+          json: async () => ({ access_token: 'new-access', refresh_token: 'new-refresh' }),
+        })
+        .mockResolvedValueOnce({ ok: true, status: 200 });
+
+      expect(await getAuthenticatedCredentials()).toEqual({
+        accessToken: 'new-access',
+        refreshToken: 'new-refresh',
+        clientId: 'client',
+      });
+      expect(crossKeychain.setPassword).toHaveBeenCalledWith(
+        'com.granola.cli',
+        'credentials',
+        JSON.stringify({
+          refreshToken: 'new-refresh',
+          accessToken: 'new-access',
+          clientId: 'client',
+        }),
+      );
+    });
+
+    it('returns null for a session that cannot be refreshed', async () => {
+      mockFetch.mockResolvedValue({ ok: false, status: 401 });
+      expect(await getAuthenticatedCredentials()).toBeNull();
+    });
+  });
+
   describe('deleteCredentials', () => {
     it('should delete credentials from keychain', async () => {
       vi.mocked(crossKeychain.deletePassword).mockResolvedValue(undefined);
@@ -156,6 +264,26 @@ describe('auth', () => {
   });
 
   describe('parseSupabaseJson', () => {
+    it.each([
+      { workos_tokens: { access_token: 'access', refresh_token: 'refresh' } },
+      { tokens: { access_token: 'access', refresh_token: 'refresh' } },
+    ])('parses structured browser token responses %j', (payload) => {
+      expect(parseSupabaseJson(JSON.stringify(payload))).toEqual({
+        accessToken: 'access',
+        refreshToken: 'refresh',
+        clientId: 'client_GranolaMac',
+      });
+    });
+
+    it.each([
+      null,
+      [],
+      { workos_tokens: JSON.stringify({ access_token: 42 }) },
+      { refresh_token: { invalid: true } },
+    ])('rejects malformed token values %j', (payload) => {
+      expect(parseSupabaseJson(JSON.stringify(payload))).toBeNull();
+    });
+
     it('should parse valid Supabase JSON with WorkOS tokens', () => {
       const supabaseJson = {
         workos_tokens: JSON.stringify({
@@ -436,13 +564,14 @@ describe('auth', () => {
       const result = await refreshAccessToken();
 
       expect(mockFetch).toHaveBeenCalledWith(
-        'https://api.workos.com/user_management/authenticate',
+        'https://api.granola.ai/v1/refresh-access-token',
         expect.objectContaining({
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: 'Bearer old-access-token',
+          },
           body: JSON.stringify({
-            client_id: 'test-client-id',
-            grant_type: 'refresh_token',
             refresh_token: 'old-refresh-token',
           }),
         }),
@@ -487,17 +616,24 @@ describe('auth', () => {
       expect(mockFetch).not.toHaveBeenCalled();
     });
 
-    it('should return null when missing clientId', async () => {
+    it('should refresh without requiring a WorkOS client ID', async () => {
       const storedCreds = JSON.stringify({
         refreshToken: 'old-refresh-token',
         accessToken: 'old-access-token',
       });
       vi.mocked(crossKeychain.getPassword).mockResolvedValue(storedCreds);
+      mockFetch.mockResolvedValue({
+        ok: true,
+        json: async () => ({
+          access_token: 'new-access-token',
+          refresh_token: 'new-refresh-token',
+        }),
+      });
 
       const result = await refreshAccessToken();
 
-      expect(result).toBeNull();
-      expect(mockFetch).not.toHaveBeenCalled();
+      expect(result?.accessToken).toBe('new-access-token');
+      expect(mockFetch).toHaveBeenCalled();
     });
 
     it('should return null when WorkOS returns error', async () => {
@@ -520,7 +656,7 @@ describe('auth', () => {
       expect(crossKeychain.setPassword).not.toHaveBeenCalled();
     });
 
-    it('should return null on network error', async () => {
+    it('should propagate network errors instead of reporting an invalid session', async () => {
       const storedCreds = JSON.stringify({
         refreshToken: 'old-refresh-token',
         accessToken: 'old-access-token',
@@ -530,9 +666,7 @@ describe('auth', () => {
 
       mockFetch.mockRejectedValue(new Error('Network error'));
 
-      const result = await refreshAccessToken();
-
-      expect(result).toBeNull();
+      await expect(refreshAccessToken()).rejects.toThrow('Network error');
       expect(crossKeychain.setPassword).not.toHaveBeenCalled();
     });
 
@@ -560,12 +694,74 @@ describe('auth', () => {
       expect(withLock).toHaveBeenCalledWith(expect.any(Function));
     });
 
-    it('should return null when lock acquisition fails', async () => {
+    it.each([
+      null,
+      {},
+      { access_token: '' },
+      { access_token: 42 },
+      { access_token: 'new', refresh_token: '' },
+    ])('should not overwrite credentials with an invalid refresh response %j', async (data) => {
+      vi.mocked(crossKeychain.getPassword).mockResolvedValue(
+        JSON.stringify({
+          refreshToken: 'old-refresh-token',
+          accessToken: 'old-access-token',
+          clientId: 'client',
+        }),
+      );
+      mockFetch.mockResolvedValue({ ok: true, json: async () => data });
+
+      await expect(refreshAccessToken()).rejects.toThrow(/invalid credentials/i);
+      expect(crossKeychain.setPassword).not.toHaveBeenCalled();
+    });
+
+    it('should preserve the refresh token when the response does not rotate it', async () => {
+      vi.mocked(crossKeychain.getPassword).mockResolvedValue(
+        JSON.stringify({
+          refreshToken: 'old-refresh-token',
+          accessToken: 'old-access-token',
+          clientId: 'client',
+        }),
+      );
+      mockFetch.mockResolvedValue({
+        ok: true,
+        json: async () => ({ access_token: 'new-access-token' }),
+      });
+
+      expect((await refreshAccessToken())?.refreshToken).toBe('old-refresh-token');
+    });
+
+    it('should propagate lock failures instead of reporting an invalid session', async () => {
       vi.mocked(withLock).mockRejectedValueOnce(new Error('Failed to acquire token refresh lock'));
 
-      const result = await refreshAccessToken();
+      await expect(refreshAccessToken()).rejects.toThrow('Failed to acquire token refresh lock');
+    });
 
-      expect(result).toBeNull();
+    it('should propagate a server outage during refresh', async () => {
+      vi.mocked(crossKeychain.getPassword).mockResolvedValue(
+        JSON.stringify({
+          refreshToken: 'refresh',
+          accessToken: 'access',
+          clientId: 'client',
+        }),
+      );
+      mockFetch.mockResolvedValue({ ok: false, status: 503 });
+      await expect(refreshAccessToken()).rejects.toMatchObject({ status: 503 });
+      expect(crossKeychain.setPassword).not.toHaveBeenCalled();
+    });
+
+    it('does not expose a malformed refresh response in an error', async () => {
+      vi.mocked(crossKeychain.getPassword).mockResolvedValue(
+        JSON.stringify({
+          refreshToken: 'refresh',
+          accessToken: 'access',
+          clientId: 'client',
+        }),
+      );
+      mockFetch.mockResolvedValue(new Response('private-refresh-response'));
+      await expect(refreshAccessToken()).rejects.toThrow(
+        'Granola returned invalid credentials during token refresh.',
+      );
+      expect(crossKeychain.setPassword).not.toHaveBeenCalled();
     });
   });
 });

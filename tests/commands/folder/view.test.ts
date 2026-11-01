@@ -56,6 +56,33 @@ describe('folder view command', () => {
     expect(jsonOutput).toBeDefined();
   });
 
+  it('should use the API meeting count and workspace display name', async () => {
+    vi.mocked(folders.get).mockResolvedValue({
+      ...mockFolder,
+      workspace_name: 'Sales Team',
+      document_count: 12,
+    });
+
+    const program = new Command().addCommand(createViewCommand());
+    await program.parseAsync(['node', 'test', 'view', 'folder-id']);
+
+    expect(console_.logs).toContain('12 meetings · Workspace Sales Team');
+  });
+
+  it('should preserve an explicit zero meeting count and omit absent workspace details', async () => {
+    vi.mocked(folders.get).mockResolvedValue({
+      ...mockFolder,
+      workspace_id: undefined,
+      document_count: 0,
+    });
+
+    const program = new Command().addCommand(createViewCommand());
+    await program.parseAsync(['node', 'test', 'view', 'folder-id']);
+
+    expect(console_.logs).toContain('0 meetings');
+    expect(console_.logs.join('\n')).not.toContain('undefined');
+  });
+
   it('should exit with code 4 when folder not found', async () => {
     vi.mocked(folders.get).mockResolvedValue(null);
 

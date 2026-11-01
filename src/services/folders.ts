@@ -27,9 +27,11 @@ function normalizeFolder(folder: DocumentList): Folder {
     title: folder.title ?? folder.name ?? 'Untitled',
     created_at: folder.created_at,
     workspace_id: folder.workspace_id,
+    workspace_name: folder.workspace_display_name,
     owner_id: folder.owner_id,
+    document_count: folder.document_count,
     document_ids: documentIds ?? [],
-    is_favourite: folder.is_favourite,
+    is_favourite: folder.is_favourited ?? folder.is_favourite ?? false,
   };
 }
 

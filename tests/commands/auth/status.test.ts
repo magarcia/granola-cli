@@ -4,7 +4,7 @@ import { createStatusCommand } from '../../../src/commands/auth/status.js';
 import { captureConsole, mockProcessExit } from '../../setup.js';
 
 vi.mock('../../../src/lib/auth.js', () => ({
-  getCredentials: vi.fn(),
+  getAuthenticatedCredentials: vi.fn(),
 }));
 
 import * as auth from '../../../src/lib/auth.js';
@@ -22,7 +22,7 @@ describe('auth status command', () => {
   });
 
   it('should show authenticated when credentials exist', async () => {
-    vi.mocked(auth.getCredentials).mockResolvedValue({
+    vi.mocked(auth.getAuthenticatedCredentials).mockResolvedValue({
       refreshToken: 'token',
       accessToken: 'access',
       clientId: 'client',
@@ -36,7 +36,7 @@ describe('auth status command', () => {
   });
 
   it('should show not authenticated when no credentials', async () => {
-    vi.mocked(auth.getCredentials).mockResolvedValue(null);
+    vi.mocked(auth.getAuthenticatedCredentials).mockResolvedValue(null);
 
     const program = new Command();
     program.addCommand(createStatusCommand());
@@ -46,7 +46,7 @@ describe('auth status command', () => {
   });
 
   it('should output JSON when --output json is set', async () => {
-    vi.mocked(auth.getCredentials).mockResolvedValue({
+    vi.mocked(auth.getAuthenticatedCredentials).mockResolvedValue({
       refreshToken: 'token',
       accessToken: 'access',
       clientId: 'client',
@@ -70,7 +70,7 @@ describe('auth status command', () => {
   });
 
   it('should reject invalid output formats', async () => {
-    vi.mocked(auth.getCredentials).mockResolvedValue(null);
+    vi.mocked(auth.getAuthenticatedCredentials).mockResolvedValue(null);
     const exit = mockProcessExit();
 
     const program = new Command();
@@ -82,6 +82,21 @@ describe('auth status command', () => {
 
     expect(console_.errors.some((log) => /invalid format/i.test(log))).toBe(true);
     expect(exit.exitCodes).toContain(1);
+    expect(auth.getAuthenticatedCredentials).not.toHaveBeenCalled();
     exit.restore();
+  });
+
+  it('reports false when stored credentials are no longer valid', async () => {
+    vi.mocked(auth.getAuthenticatedCredentials).mockResolvedValue(null);
+    const program = new Command().addCommand(createStatusCommand());
+    await program.parseAsync(['node', 'test', 'status', '--output', 'json']);
+    expect(JSON.parse(console_.logs[0])).toEqual({ authenticated: false });
+  });
+
+  it('propagates a verification outage instead of reporting authentication success', async () => {
+    vi.mocked(auth.getAuthenticatedCredentials).mockRejectedValue(new Error('fetch failed'));
+    const program = new Command().addCommand(createStatusCommand());
+    await expect(program.parseAsync(['node', 'test', 'status'])).rejects.toThrow('fetch failed');
+    expect(console_.logs).toEqual([]);
   });
 });

@@ -1,8 +1,15 @@
-import { rm } from 'node:fs/promises';
+import { mkdtemp, rm, unlink } from 'node:fs/promises';
 import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { _testing, acquireLock, releaseLock, withLock } from '../../src/lib/lock.js';
+
+vi.mock('node:os', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:os')>();
+  return { ...actual, homedir: vi.fn(actual.homedir), tmpdir: vi.fn(actual.tmpdir) };
+});
+
+const tempDirectory = tmpdir();
 
 function getLockFilePath(): string {
   const tempDir =
@@ -11,21 +18,17 @@ function getLockFilePath(): string {
 }
 
 describe('lock', () => {
+  let directory: string;
+
   beforeEach(async () => {
     vi.clearAllMocks();
-    try {
-      await rm(getLockFilePath(), { force: true });
-    } catch {
-      // Lock file may not exist
-    }
+    directory = await mkdtemp(join(tempDirectory, 'granola-lock-test-'));
+    vi.mocked(homedir).mockReturnValue(directory);
+    vi.mocked(tmpdir).mockReturnValue(directory);
   });
 
   afterEach(async () => {
-    try {
-      await rm(getLockFilePath(), { force: true });
-    } catch {
-      // Lock file may not exist
-    }
+    await rm(directory, { recursive: true, force: true });
   });
 
   describe('acquireLock/releaseLock', () => {
@@ -67,21 +70,18 @@ describe('lock', () => {
       const lockHandle1 = await acquireLock();
       expect(lockHandle1).not.toBeNull();
 
-      // Try to acquire with very short timeout while lock is held
       const lockHandle2 = await acquireLock(200);
       expect(lockHandle2).toBeNull();
 
       await releaseLock(lockHandle1!);
     });
 
-    it('should handle errors during release gracefully', async () => {
+    it('should tolerate a lock file removed before release', async () => {
       const lockHandle = await acquireLock();
       expect(lockHandle).not.toBeNull();
 
-      // Delete the lock file before release - unlink will fail
-      await rm(getLockFilePath(), { force: true });
+      await unlink(getLockFilePath());
 
-      // Should not throw, just log the error
       await expect(releaseLock(lockHandle!)).resolves.toBeUndefined();
     });
   });
@@ -120,7 +120,6 @@ describe('lock', () => {
     it('should serialize concurrent operations', async () => {
       const order: number[] = [];
 
-      // Start first operation and wait for it to acquire lock
       const promise1 = withLock(async () => {
         order.push(1);
         await new Promise((r) => setTimeout(r, 50));
@@ -128,7 +127,6 @@ describe('lock', () => {
         return 'first';
       });
 
-      // Small delay to ensure promise1 acquires lock first
       await new Promise((r) => setTimeout(r, 10));
 
       const promise2 = withLock(async () => {
@@ -142,7 +140,6 @@ describe('lock', () => {
 
       expect(result1).toBe('first');
       expect(result2).toBe('second');
-      // Operations should not interleave - first completes before second starts
       expect(order).toEqual([1, 2, 3, 4]);
     });
 
